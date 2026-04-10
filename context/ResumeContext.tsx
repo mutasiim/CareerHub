@@ -8,6 +8,8 @@ export type ResumeFeedback =
   | {
       isResume: true;
       score: number;
+      atsScore: number;
+      resumeTier: 'Gold' | 'Silver' | 'Bronze';
       scoreBreakdown: {
         overallImpression: number;
         contentAndRelevance: number;
@@ -21,6 +23,8 @@ export type ResumeFeedback =
       languageAndProfessionalism: string;
       recommendations: string[];
       additionalNotes: string;
+      weakestBullet: string;
+      rewrittenBullet: string;
     };
 
 type ResumeContextType = {

@@ -23,6 +23,7 @@ export default function TabLayout() {
           tabBarStyle: { display: 'none' },
         }}
       />
+
       <Tabs.Screen
         name="resume"
         options={{
@@ -32,15 +33,7 @@ export default function TabLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="feedback"
-        options={{
-          title: 'Feedback',
-          tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="sparkles" color={color} />
-          ),
-        }}
-      />
+
       <Tabs.Screen
         name="resources"
         options={{

@@ -51,7 +51,7 @@ app.post('/analyze-resume', upload.single('resume'), async (req, res) => {
       });
     }
 
-const prompt = `
+    const prompt = `
 You are a professional resume reviewer and career peer advisor.
 
 Your FIRST task is to determine whether the uploaded document is actually a resume.
@@ -74,6 +74,8 @@ If the uploaded document IS a resume, you MUST return ONLY valid JSON in exactly
 {
   "isResume": true,
   "score": number,
+  "atsScore": number,
+  "resumeTier": "Gold" | "Silver" | "Bronze",
   "scoreBreakdown": {
     "overallImpression": number,
     "contentAndRelevance": number,
@@ -86,7 +88,9 @@ If the uploaded document IS a resume, you MUST return ONLY valid JSON in exactly
   "formattingAndVisualAppeal": "string",
   "languageAndProfessionalism": "string",
   "recommendations": ["string", "string", "string"],
-  "additionalNotes": "string"
+  "additionalNotes": "string",
+  "weakestBullet": "string",
+  "rewrittenBullet": "string"
 }
 
 SCORING RUBRIC:
@@ -96,14 +100,33 @@ SCORING RUBRIC:
 - Language and Professionalism: score out of 20
 - Career Alignment / Impact: score out of 15
 
-IMPORTANT SCORING RULES:
+ATS SCORE RULES:
+- Score ATS readiness out of 100
+- Evaluate ATS score based on:
+  - formatting simplicity
+  - section clarity
+  - keyword relevance
+  - consistency
+  - readability / skimmability
+- Do not make ATS score identical to overall score unless clearly justified
+
+RESUME TIER RULES:
+- Gold = 85 to 100
+- Silver = 70 to 84
+- Bronze = below 70
+- Resume tier must be based on the overall score
+
+BULLET REWRITER RULES:
+- Identify the weakest or least effective bullet point in the resume
+- Put the original weak bullet in "weakestBullet"
+- Rewrite it in a stronger, more specific, more professional way in "rewrittenBullet"
+- If no bullet is clearly weak, choose one that could still be improved
+- Keep the rewritten bullet realistic and resume-ready
+
+VERY IMPORTANT RULES:
 - The total score must equal the sum of the 5 category scores
 - Total score must be out of 100
 - Use realistic scoring, not inflated scoring
-- A resume with clear issues should not score unrealistically high
-- Judge the resume like a real career advisor reviewing a student resume
-
-VERY IMPORTANT RULES:
 - If the file is not a resume, do NOT provide resume feedback sections
 - If the file is not a resume, return only the isResume:false JSON
 - Do not use markdown
