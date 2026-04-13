@@ -115,18 +115,40 @@ async function fetchRemotiveJobs({ search = '', limit = 12, category } = {}) {
 
 app.get('/jobs/recommended', async (req, res) => {
   try {
-    const internshipJobs = await fetchRemotiveJobs({
-      search: 'software engineer intern',
-      category: 'software-dev',
-      limit: 9,
-    });
+    const searches = [
+      'software engineer intern',
+      'frontend intern',
+      'data analyst intern',
+    ];
 
-    const jobs = internshipJobs.map((job) => normalizeRemotiveJob(job, 'software engineer intern'));
-    const roles = buildRecommendedRoles(jobs);
+    const results = await Promise.all(
+      searches.map((search) =>
+        fetchRemotiveJobs({
+          search,
+          limit: 8,
+        })
+      )
+    );
+
+    const mergedJobs = results
+      .flat()
+      .map((job) => normalizeRemotiveJob(job))
+      .filter((job) => job.applyUrl);
+
+    const uniqueJobs = Array.from(
+      new Map(
+        mergedJobs.map((job) => [
+          `${job.title}-${job.company}-${job.location}`,
+          job,
+        ])
+      ).values()
+    ).slice(0, 9);
+
+    const roles = buildRecommendedRoles(uniqueJobs);
 
     res.json({
       roles,
-      jobs,
+      jobs: uniqueJobs,
     });
   } catch (error) {
     console.error('RECOMMENDED JOBS ERROR:', error);
