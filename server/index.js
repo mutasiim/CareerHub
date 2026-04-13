@@ -160,7 +160,7 @@ function buildRecommendedRoles(jobs) {
   }));
 }
 
-async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPerPage = 20 } = {}) {
+async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPerPage = 50 } = {}) {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
 
@@ -243,10 +243,11 @@ function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = 
     const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
     const matchesSearch = !search || haystack.includes(search.toLowerCase());
     const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
+    const filterHaystack = `${job.title} ${job.type} ${job.location} ${job.description || ''}`.toLowerCase();
     const matchesFilter =
       filter === 'All' ||
-      (filter === 'Internship' && `${job.title} ${job.type}`.toLowerCase().includes('intern')) ||
-      (filter === 'Remote' && job.location.toLowerCase().includes('remote'));
+      (filter === 'Internship' && (filterHaystack.includes('intern') || filterHaystack.includes('internship'))) ||
+      (filter === 'Remote' && (filterHaystack.includes('remote') || filterHaystack.includes('work from home') || filterHaystack.includes('hybrid')));
 
     return matchesSearch && matchesLocation && matchesFilter;
   });
@@ -256,40 +257,55 @@ app.get('/jobs/recommended', async (req, res) => {
   try {
     const searches = [
       'software engineer intern',
-      'frontend intern',
-      'full stack intern',
+      'software developer intern',
+      'frontend developer intern',
+      'full stack developer intern',
       'data analyst intern',
       'python intern',
+      'remote software intern',
     ];
 
-    const adzunaResults = await Promise.all(
-      searches.map((search) => fetchAdzunaJobs({ search, resultsPerPage: 8 }))
+    const adzunaResults = await Promise.allSettled(
+      searches.map((search) => fetchAdzunaJobs({ search, resultsPerPage: 24 }))
     );
 
-    const greenhouseJobs = await fetchGreenhouseJobs({});
-    const leverJobs = await fetchLeverJobs({});
+    const successfulAdzunaJobs = adzunaResults
+      .filter((result) => result.status === 'fulfilled')
+      .flatMap((result) => result.value)
+      .map((job) => normalizeAdzunaJob(job));
+
+    const [greenhouseResult, leverResult] = await Promise.allSettled([
+      fetchGreenhouseJobs({ search: 'intern' }),
+      fetchLeverJobs({ search: 'intern' }),
+    ]);
+
+    const greenhouseJobs = greenhouseResult.status === 'fulfilled' ? greenhouseResult.value : [];
+    const leverJobs = leverResult.status === 'fulfilled' ? leverResult.value : [];
 
     const mergedJobs = mergeAndDedupeJobs([
-      adzunaResults.flat().map((job) => normalizeAdzunaJob(job)),
+      successfulAdzunaJobs,
       greenhouseJobs,
       leverJobs,
     ]);
 
     const recommendedJobs = mergedJobs
       .filter((job) => {
-        const text = `${job.title} ${job.type} ${job.description || ''}`.toLowerCase();
+        const text = `${job.title} ${job.type} ${job.location} ${job.description || ''}`.toLowerCase();
         return (
           text.includes('intern') ||
+          text.includes('internship') ||
           text.includes('software') ||
           text.includes('frontend') ||
+          text.includes('full stack') ||
           text.includes('developer') ||
           text.includes('engineer') ||
           text.includes('analyst') ||
-          text.includes('data')
+          text.includes('data') ||
+          text.includes('python')
         );
       })
       .filter((job) => job.applyUrl)
-      .slice(0, 12);
+      .slice(0, 30);
 
     const roles = recommendedJobs.length > 0 ? buildRecommendedRoles(recommendedJobs) : [];
 
@@ -311,19 +327,28 @@ app.get('/jobs/search', async (req, res) => {
     const query = asCleanString(req.query.query, 'software engineer');
     const location = asCleanString(req.query.location);
     const filter = asCleanString(req.query.filter, 'All');
+    const page = Number.parseInt(asCleanString(req.query.page, '1'), 10) || 1;
+
+    let effectiveQuery = query;
+    if (filter === 'Internship' && !/intern/i.test(effectiveQuery)) {
+      effectiveQuery = `${effectiveQuery} intern`;
+    }
+    if (filter === 'Remote' && !/remote/i.test(effectiveQuery)) {
+      effectiveQuery = `remote ${effectiveQuery}`;
+    }
 
     const [adzunaRawJobs, greenhouseJobs, leverJobs] = await Promise.all([
-      fetchAdzunaJobs({ search: query, location, resultsPerPage: 20 }),
-      fetchGreenhouseJobs({ search: query, location }),
-      fetchLeverJobs({ search: query, location }),
+      fetchAdzunaJobs({ search: effectiveQuery, location, page, resultsPerPage: 50 }),
+      fetchGreenhouseJobs({ search: effectiveQuery, location }),
+      fetchLeverJobs({ search: effectiveQuery, location }),
     ]);
 
-    const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, query));
+    const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, effectiveQuery));
 
     const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
-    const jobs = applyJobFilters(mergedJobs, { search: query, location, filter }).slice(0, 20);
+    const jobs = applyJobFilters(mergedJobs, { search: effectiveQuery, location, filter }).slice(0, 50);
 
-    res.json({ jobs });
+    res.json({ jobs, page });
   } catch (error) {
     console.error('SEARCH JOBS ERROR:', error);
     res.status(500).json({
