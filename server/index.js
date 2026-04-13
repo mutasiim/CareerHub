@@ -74,7 +74,6 @@ If the uploaded document IS a resume, you MUST return ONLY valid JSON in exactly
 {
   "isResume": true,
   "score": number,
-  "atsScore": number,
   "resumeTier": "Gold" | "Silver" | "Bronze",
   "scoreBreakdown": {
     "overallImpression": number,
@@ -83,14 +82,52 @@ If the uploaded document IS a resume, you MUST return ONLY valid JSON in exactly
     "languageAndProfessionalism": number,
     "careerAlignmentImpact": number
   },
-  "overallImpression": "string",
-  "contentAndRelevance": "string",
-  "formattingAndVisualAppeal": "string",
-  "languageAndProfessionalism": "string",
+  "overallImpression": {
+    "intro": "string",
+    "highImpact": [
+      { "issue": "string", "fix": "string" }
+    ],
+    "mediumImpact": [
+      { "issue": "string", "fix": "string" }
+    ],
+    "recruiterInsight": "string",
+    "outcome": "string"
+  },
+  "contentAndRelevance": {
+    "intro": "string",
+    "highImpact": [
+      { "issue": "string", "fix": "string" }
+    ],
+    "mediumImpact": [
+      { "issue": "string", "fix": "string" }
+    ],
+    "recruiterInsight": "string",
+    "outcome": "string"
+  },
+  "formattingAndVisualAppeal": {
+    "intro": "string",
+    "highImpact": [
+      { "issue": "string", "fix": "string" }
+    ],
+    "mediumImpact": [
+      { "issue": "string", "fix": "string" }
+    ],
+    "recruiterInsight": "string",
+    "outcome": "string"
+  },
+  "languageAndProfessionalism": {
+    "intro": "string",
+    "highImpact": [
+      { "issue": "string", "fix": "string" }
+    ],
+    "mediumImpact": [
+      { "issue": "string", "fix": "string" }
+    ],
+    "recruiterInsight": "string",
+    "outcome": "string"
+  },
   "recommendations": ["string", "string", "string"],
-  "additionalNotes": "string",
-  "weakestBullet": "string",
-  "rewrittenBullet": "string"
+  "additionalNotes": "string"
 }
 
 SCORING RUBRIC:
@@ -100,36 +137,21 @@ SCORING RUBRIC:
 - Language and Professionalism: score out of 20
 - Career Alignment / Impact: score out of 15
 
-ATS SCORE RULES:
-- Score ATS readiness out of 100
-- Evaluate ATS score based on:
-  - formatting simplicity
-  - section clarity
-  - keyword relevance
-  - consistency
-  - readability / skimmability
-- Do not make ATS score identical to overall score unless clearly justified
-
+ 
 RESUME TIER RULES:
 - Gold = 85 to 100
 - Silver = 70 to 84
 - Bronze = below 70
 - Resume tier must be based on the overall score
 
-BULLET REWRITER RULES:
-- Identify the weakest or least effective bullet point in the resume
-- Put the original weak bullet in "weakestBullet"
-- Rewrite it in a stronger, more specific, more professional way in "rewrittenBullet"
-- If no bullet is clearly weak, choose one that could still be improved
-- Keep the rewritten bullet realistic and resume-ready
-
+ 
 VERY IMPORTANT RULES:
 - The total score must equal the sum of the 5 category scores
 - Total score must be out of 100
 - Use realistic scoring, not inflated scoring
 - If the file is not a resume, do NOT provide resume feedback sections
 - If the file is not a resume, return only the isResume:false JSON
-- Do not use markdown
+- Do not use markdown or code fences
 - Do not include any explanation outside the JSON
 - Be strict in deciding whether it is a resume
 
@@ -148,24 +170,38 @@ WRITING STYLE RULES:
 
 SECTION GUIDELINES:
 
+For EACH of these four sections — Overall Impression, Content and Relevance, Formatting and Visual Appeal, and Language and Professionalism — follow this structure:
+- "intro": write a short 2-3 sentence overview in a supportive but honest tone
+- "highImpact": provide 2 or 3 high-impact issues, each with a very specific fix
+- "mediumImpact": provide 1 or 2 medium-impact issues, each with a specific fix
+- "recruiterInsight": explain how a recruiter would likely react to this section
+- "outcome": explain what would improve if the student fixes the issues
+
 Overall Impression:
-- Comment on first-glance professionalism, balance, organization, and ATS-friendliness
+- Focus on first-glance professionalism, balance, organization, and overall readiness for internships or early-career roles
 
 Content and Relevance:
-- Evaluate alignment of experiences/skills with likely goals
+- Focus on alignment of experiences and skills with likely goals
 - Discuss quantification, project depth, and relevance of sections
 
 Formatting and Visual Appeal:
-- Evaluate consistency, skimmability, spacing, section order, margins, and alignment
+- Focus on consistency, skimmability, spacing, section order, margins, and alignment
 
 Language and Professionalism:
-- Evaluate action verbs, clarity, specificity, precision, and professionalism
+- Focus on action verbs, clarity, specificity, precision, and professionalism
 
 Recommendations:
-- Provide 3 specific, high-impact action steps
+- Provide exactly 3 specific, high-impact action steps
 
 Additional Notes:
 - Mention inconsistencies, typos, spelling issues, formatting mismatches, or say clearly if there are no major issues
+
+JSON QUALITY RULES:
+- Every section object must contain all 5 keys: intro, highImpact, mediumImpact, recruiterInsight, outcome
+- highImpact must contain at least 2 objects
+- mediumImpact must contain at least 1 object
+- Each issue and fix must be specific to the uploaded resume, not generic advice
+- Keep the response concise but useful
 
 Uploaded text:
 ${resumeText}
@@ -182,6 +218,7 @@ ${resumeText}
     let parsed;
     try {
       parsed = JSON.parse(rawText);
+      console.log('PARSED AI JSON:', JSON.stringify(parsed, null, 2));
     } catch (parseError) {
       console.error('JSON parse error:', parseError);
       return res.status(500).json({
@@ -190,10 +227,30 @@ ${resumeText}
       });
     }
 
-    res.json({
-      result: parsed,
-      extractedTextLength: resumeText.length,
-    });
+    const requiredSectionKeys = [
+      'overallImpression',
+      'contentAndRelevance',
+      'formattingAndVisualAppeal',
+      'languageAndProfessionalism',
+    ];
+
+    if (parsed?.isResume === true) {
+      const missingSections = requiredSectionKeys.filter((key) => {
+        const section = parsed[key];
+        return !section || typeof section !== 'object';
+      });
+
+      if (missingSections.length > 0) {
+        console.error('AI response missing required sections:', missingSections);
+        return res.status(500).json({
+          error: 'AI response missing required resume sections',
+          missingSections,
+          raw: parsed,
+        });
+      }
+    }
+
+    res.json(parsed);
   } catch (error) {
     console.error('FULL SERVER ERROR:', error);
 
