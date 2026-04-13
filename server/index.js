@@ -22,33 +22,50 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const REMOTIVE_API_URL = 'https://remotive.com/api/remote-jobs';
+const ADZUNA_API_URL = 'https://api.adzuna.com/v1/api';
+const ADZUNA_COUNTRY = process.env.ADZUNA_COUNTRY || 'us';
+const GREENHOUSE_BOARDS = (process.env.GREENHOUSE_BOARDS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+const LEVER_BOARDS = (process.env.LEVER_BOARDS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 function asCleanString(value, fallback = '') {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-function normalizeRemotiveJob(job, searchQuery = '') {
-  const title = asCleanString(job?.title, 'Untitled Role');
-  const company = asCleanString(job?.company_name, 'Unknown Company');
-  const location = asCleanString(job?.candidate_required_location, 'Remote');
-  const type = asCleanString(job?.job_type, 'Remote Role')
-    .replace(/_/g, ' ')
+function toTitleCase(value) {
+  return asCleanString(value)
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
-  const haystack = `${title} ${company} ${job?.category || ''} ${job?.description || ''}`.toLowerCase();
-  const normalizedQuery = searchQuery.toLowerCase();
+function buildFitLabel(searchQuery, haystack) {
+  const normalizedQuery = asCleanString(searchQuery).toLowerCase();
+  if (!normalizedQuery) return 'Good Match';
 
-  let fit = 'Good Match';
-  if (normalizedQuery) {
-    if (haystack.includes(normalizedQuery)) {
-      fit = 'High Match';
-    } else if (normalizedQuery.split(/\s+/).some((word) => word.length > 2 && haystack.includes(word))) {
-      fit = 'Potential Match';
-    }
-  } else if (String(job?.job_type || '').toLowerCase().includes('intern')) {
-    fit = 'Strong Internship Match';
+  if (haystack.includes(normalizedQuery)) {
+    return 'High Match';
   }
+
+  if (normalizedQuery.split(/\s+/).some((word) => word.length > 2 && haystack.includes(word))) {
+    return 'Potential Match';
+  }
+
+  return 'Good Match';
+}
+
+function normalizeAdzunaJob(job, searchQuery = '') {
+  const title = asCleanString(job?.title, 'Untitled Role');
+  const company = asCleanString(job?.company?.display_name, 'Unknown Company');
+  const location = asCleanString(job?.location?.display_name || job?.location?.area?.join(', '), 'Location not specified');
+  const type = toTitleCase(job?.contract_type || job?.contract_time || 'Role');
+  const description = asCleanString(job?.description);
+  const haystack = `${title} ${company} ${description}`.toLowerCase();
 
   return {
     id: job?.id ? String(job.id) : undefined,
@@ -56,9 +73,55 @@ function normalizeRemotiveJob(job, searchQuery = '') {
     company,
     location,
     type,
-    fit,
-    applyUrl: asCleanString(job?.url) || undefined,
-    source: 'Remotive',
+    fit: buildFitLabel(searchQuery, haystack),
+    applyUrl: asCleanString(job?.redirect_url || job?.adref) || undefined,
+    source: 'Adzuna',
+    description,
+  };
+}
+
+function normalizeGreenhouseJob(job, boardToken, searchQuery = '') {
+  const title = asCleanString(job?.title, 'Untitled Role');
+  const company = toTitleCase(boardToken.replace(/[-_]+/g, ' ')) || 'Greenhouse Company';
+  const location = asCleanString(job?.location?.name, 'Location not specified');
+  const metadataText = Array.isArray(job?.metadata)
+    ? job.metadata
+        .flatMap((item) => [item?.name, item?.value])
+        .filter(Boolean)
+        .join(' ')
+    : '';
+  const haystack = `${title} ${company} ${location} ${metadataText}`.toLowerCase();
+
+  return {
+    id: job?.id ? `greenhouse-${job.id}` : undefined,
+    title,
+    company,
+    location,
+    type: 'Role',
+    fit: buildFitLabel(searchQuery, haystack),
+    applyUrl: asCleanString(job?.absolute_url || `https://boards.greenhouse.io/${boardToken}/jobs/${job?.id}`) || undefined,
+    source: 'Greenhouse',
+  };
+}
+
+function normalizeLeverJob(job, site, searchQuery = '') {
+  const title = asCleanString(job?.text, 'Untitled Role');
+  const company = toTitleCase(site.replace(/[-_]+/g, ' ')) || 'Lever Company';
+  const location = asCleanString(job?.categories?.location, 'Location not specified');
+  const type = asCleanString(job?.categories?.commitment, 'Role');
+  const description = asCleanString(job?.descriptionPlain || job?.description);
+  const haystack = `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
+
+  return {
+    id: job?.id ? `lever-${job.id}` : undefined,
+    title,
+    company,
+    location,
+    type,
+    fit: buildFitLabel(searchQuery, haystack),
+    applyUrl: asCleanString(job?.hostedUrl || `https://jobs.lever.co/${site}/${job?.id}`) || undefined,
+    source: 'Lever',
+    description,
   };
 }
 
@@ -97,20 +160,96 @@ function buildRecommendedRoles(jobs) {
   }));
 }
 
-async function fetchRemotiveJobs({ search = '', limit = 12, category } = {}) {
-  const params = new URLSearchParams();
-  if (search) params.append('search', search);
-  if (limit) params.append('limit', String(limit));
-  if (category) params.append('category', category);
+async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPerPage = 20 } = {}) {
+  const appId = process.env.ADZUNA_APP_ID;
+  const appKey = process.env.ADZUNA_APP_KEY;
 
-  const response = await fetch(`${REMOTIVE_API_URL}?${params.toString()}`);
+  if (!appId || !appKey) {
+    throw new Error('Missing Adzuna credentials in environment variables');
+  }
+
+  const params = new URLSearchParams({
+    app_id: appId,
+    app_key: appKey,
+    results_per_page: String(resultsPerPage),
+    'content-type': 'application/json',
+  });
+
+  if (search) params.append('what', search);
+  if (location) params.append('where', location);
+
+  const response = await fetch(`${ADZUNA_API_URL}/jobs/${ADZUNA_COUNTRY}/search/${page}?${params.toString()}`);
 
   if (!response.ok) {
-    throw new Error(`Remotive request failed with status ${response.status}`);
+    throw new Error(`Adzuna request failed with status ${response.status}`);
   }
 
   const data = await response.json();
-  return Array.isArray(data?.jobs) ? data.jobs : [];
+  return Array.isArray(data?.results) ? data.results : [];
+}
+
+async function fetchGreenhouseJobs({ search = '', location = '' } = {}) {
+  if (GREENHOUSE_BOARDS.length === 0) return [];
+
+  const responses = await Promise.all(
+    GREENHOUSE_BOARDS.map(async (boardToken) => {
+      const response = await fetch(`https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      return jobs.map((job) => normalizeGreenhouseJob(job, boardToken, search));
+    })
+  );
+
+  return responses.flat().filter((job) => {
+    const matchesSearch = !search || `${job.title} ${job.company}`.toLowerCase().includes(search.toLowerCase());
+    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
+    return matchesSearch && matchesLocation;
+  });
+}
+
+async function fetchLeverJobs({ search = '', location = '' } = {}) {
+  if (LEVER_BOARDS.length === 0) return [];
+
+  const responses = await Promise.all(
+    LEVER_BOARDS.map(async (site) => {
+      const response = await fetch(`https://api.lever.co/v0/postings/${site}?mode=json`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      const jobs = Array.isArray(data) ? data : [];
+      return jobs.map((job) => normalizeLeverJob(job, site, search));
+    })
+  );
+
+  return responses.flat().filter((job) => {
+    const matchesSearch = !search || `${job.title} ${job.company}`.toLowerCase().includes(search.toLowerCase());
+    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
+    return matchesSearch && matchesLocation;
+  });
+}
+
+function mergeAndDedupeJobs(jobLists) {
+  const merged = jobLists.flat().filter((job) => job && job.title && job.company);
+
+  return Array.from(
+    new Map(
+      merged.map((job) => [job.applyUrl || `${job.title}-${job.company}-${job.location}`, job])
+    ).values()
+  );
+}
+
+function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = {}) {
+  return jobs.filter((job) => {
+    const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+    const matchesSearch = !search || haystack.includes(search.toLowerCase());
+    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
+    const matchesFilter =
+      filter === 'All' ||
+      (filter === 'Internship' && `${job.title} ${job.type}`.toLowerCase().includes('intern')) ||
+      (filter === 'Remote' && job.location.toLowerCase().includes('remote'));
+
+    return matchesSearch && matchesLocation && matchesFilter;
+  });
 }
 
 app.get('/jobs/recommended', async (req, res) => {
@@ -118,37 +257,45 @@ app.get('/jobs/recommended', async (req, res) => {
     const searches = [
       'software engineer intern',
       'frontend intern',
+      'full stack intern',
       'data analyst intern',
+      'python intern',
     ];
 
-    const results = await Promise.all(
-      searches.map((search) =>
-        fetchRemotiveJobs({
-          search,
-          limit: 8,
-        })
-      )
+    const adzunaResults = await Promise.all(
+      searches.map((search) => fetchAdzunaJobs({ search, resultsPerPage: 8 }))
     );
 
-    const mergedJobs = results
-      .flat()
-      .map((job) => normalizeRemotiveJob(job))
-      .filter((job) => job.applyUrl);
+    const greenhouseJobs = await fetchGreenhouseJobs({});
+    const leverJobs = await fetchLeverJobs({});
 
-    const uniqueJobs = Array.from(
-      new Map(
-        mergedJobs.map((job) => [
-          `${job.title}-${job.company}-${job.location}`,
-          job,
-        ])
-      ).values()
-    ).slice(0, 9);
+    const mergedJobs = mergeAndDedupeJobs([
+      adzunaResults.flat().map((job) => normalizeAdzunaJob(job)),
+      greenhouseJobs,
+      leverJobs,
+    ]);
 
-    const roles = buildRecommendedRoles(uniqueJobs);
+    const recommendedJobs = mergedJobs
+      .filter((job) => {
+        const text = `${job.title} ${job.type} ${job.description || ''}`.toLowerCase();
+        return (
+          text.includes('intern') ||
+          text.includes('software') ||
+          text.includes('frontend') ||
+          text.includes('developer') ||
+          text.includes('engineer') ||
+          text.includes('analyst') ||
+          text.includes('data')
+        );
+      })
+      .filter((job) => job.applyUrl)
+      .slice(0, 12);
+
+    const roles = recommendedJobs.length > 0 ? buildRecommendedRoles(recommendedJobs) : [];
 
     res.json({
       roles,
-      jobs: uniqueJobs,
+      jobs: recommendedJobs,
     });
   } catch (error) {
     console.error('RECOMMENDED JOBS ERROR:', error);
@@ -165,25 +312,16 @@ app.get('/jobs/search', async (req, res) => {
     const location = asCleanString(req.query.location);
     const filter = asCleanString(req.query.filter, 'All');
 
-    const jobsFromApi = await fetchRemotiveJobs({
-      search: query,
-      category: 'software-dev',
-      limit: 18,
-    });
+    const [adzunaRawJobs, greenhouseJobs, leverJobs] = await Promise.all([
+      fetchAdzunaJobs({ search: query, location, resultsPerPage: 20 }),
+      fetchGreenhouseJobs({ search: query, location }),
+      fetchLeverJobs({ search: query, location }),
+    ]);
 
-    let jobs = jobsFromApi.map((job) => normalizeRemotiveJob(job, query));
+    const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, query));
 
-    if (filter.toLowerCase() === 'internship') {
-      jobs = jobs.filter((job) => job.type.toLowerCase().includes('intern'));
-    }
-
-    if (filter.toLowerCase() === 'remote') {
-      jobs = jobs.filter((job) => job.location.toLowerCase().includes('remote') || job.location.toLowerCase().includes('worldwide'));
-    }
-
-    if (location) {
-      jobs = jobs.filter((job) => job.location.toLowerCase().includes(location.toLowerCase()));
-    }
+    const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
+    const jobs = applyJobFilters(mergedJobs, { search: query, location, filter }).slice(0, 20);
 
     res.json({ jobs });
   } catch (error) {
