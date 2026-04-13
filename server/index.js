@@ -17,8 +17,160 @@ app.use(express.json());
 
 const upload = multer({ dest: 'uploads/' });
 
+
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+});
+
+const REMOTIVE_API_URL = 'https://remotive.com/api/remote-jobs';
+
+function asCleanString(value, fallback = '') {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
+}
+
+function normalizeRemotiveJob(job, searchQuery = '') {
+  const title = asCleanString(job?.title, 'Untitled Role');
+  const company = asCleanString(job?.company_name, 'Unknown Company');
+  const location = asCleanString(job?.candidate_required_location, 'Remote');
+  const type = asCleanString(job?.job_type, 'Remote Role')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+  const haystack = `${title} ${company} ${job?.category || ''} ${job?.description || ''}`.toLowerCase();
+  const normalizedQuery = searchQuery.toLowerCase();
+
+  let fit = 'Good Match';
+  if (normalizedQuery) {
+    if (haystack.includes(normalizedQuery)) {
+      fit = 'High Match';
+    } else if (normalizedQuery.split(/\s+/).some((word) => word.length > 2 && haystack.includes(word))) {
+      fit = 'Potential Match';
+    }
+  } else if (String(job?.job_type || '').toLowerCase().includes('intern')) {
+    fit = 'Strong Internship Match';
+  }
+
+  return {
+    id: job?.id ? String(job.id) : undefined,
+    title,
+    company,
+    location,
+    type,
+    fit,
+    applyUrl: asCleanString(job?.url) || undefined,
+    source: 'Remotive',
+  };
+}
+
+function buildRecommendedRoles(jobs) {
+  const keywordRules = [
+    {
+      label: 'Software Engineering Intern',
+      reason:
+        'These roles emphasize coding, software development, and technical problem-solving, which align well with a computer science student profile.',
+      keywords: ['software engineer', 'software development', 'backend', 'frontend', 'full stack', 'developer'],
+    },
+    {
+      label: 'Frontend / Full-Stack Intern',
+      reason:
+        'These openings focus on application development and product-facing engineering work, which can be a strong fit for project-based technical experience.',
+      keywords: ['frontend', 'front-end', 'full stack', 'full-stack', 'react', 'web'],
+    },
+    {
+      label: 'Data / Analytics Intern',
+      reason:
+        'These roles may be relevant if the resume includes programming, analytical thinking, and data-oriented coursework or projects.',
+      keywords: ['data', 'analytics', 'machine learning', 'python', 'sql'],
+    },
+  ];
+
+  const matchedRoles = keywordRules.filter((rule) =>
+    jobs.some((job) => {
+      const haystack = `${job.title} ${job.company} ${job.type}`.toLowerCase();
+      return rule.keywords.some((keyword) => haystack.includes(keyword));
+    })
+  );
+
+  return (matchedRoles.length > 0 ? matchedRoles : keywordRules.slice(0, 3)).slice(0, 3).map((role) => ({
+    title: role.label,
+    reason: role.reason,
+  }));
+}
+
+async function fetchRemotiveJobs({ search = '', limit = 12, category } = {}) {
+  const params = new URLSearchParams();
+  if (search) params.append('search', search);
+  if (limit) params.append('limit', String(limit));
+  if (category) params.append('category', category);
+
+  const response = await fetch(`${REMOTIVE_API_URL}?${params.toString()}`);
+
+  if (!response.ok) {
+    throw new Error(`Remotive request failed with status ${response.status}`);
+  }
+
+  const data = await response.json();
+  return Array.isArray(data?.jobs) ? data.jobs : [];
+}
+
+app.get('/jobs/recommended', async (req, res) => {
+  try {
+    const internshipJobs = await fetchRemotiveJobs({
+      search: 'software engineer intern',
+      category: 'software-dev',
+      limit: 9,
+    });
+
+    const jobs = internshipJobs.map((job) => normalizeRemotiveJob(job, 'software engineer intern'));
+    const roles = buildRecommendedRoles(jobs);
+
+    res.json({
+      roles,
+      jobs,
+    });
+  } catch (error) {
+    console.error('RECOMMENDED JOBS ERROR:', error);
+    res.status(500).json({
+      error: 'Failed to load recommended jobs',
+      details: error?.message || 'Unknown error',
+    });
+  }
+});
+
+app.get('/jobs/search', async (req, res) => {
+  try {
+    const query = asCleanString(req.query.query, 'software engineer');
+    const location = asCleanString(req.query.location);
+    const filter = asCleanString(req.query.filter, 'All');
+
+    const jobsFromApi = await fetchRemotiveJobs({
+      search: query,
+      category: 'software-dev',
+      limit: 18,
+    });
+
+    let jobs = jobsFromApi.map((job) => normalizeRemotiveJob(job, query));
+
+    if (filter.toLowerCase() === 'internship') {
+      jobs = jobs.filter((job) => job.type.toLowerCase().includes('intern'));
+    }
+
+    if (filter.toLowerCase() === 'remote') {
+      jobs = jobs.filter((job) => job.location.toLowerCase().includes('remote') || job.location.toLowerCase().includes('worldwide'));
+    }
+
+    if (location) {
+      jobs = jobs.filter((job) => job.location.toLowerCase().includes(location.toLowerCase()));
+    }
+
+    res.json({ jobs });
+  } catch (error) {
+    console.error('SEARCH JOBS ERROR:', error);
+    res.status(500).json({
+      error: 'Failed to search jobs',
+      details: error?.message || 'Unknown error',
+    });
+  }
 });
 
 app.post('/analyze-resume', upload.single('resume'), async (req, res) => {
