@@ -17,7 +17,6 @@ app.use(express.json());
 
 const upload = multer({ dest: 'uploads/' });
 
-
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -62,7 +61,10 @@ function buildFitLabel(searchQuery, haystack) {
 function normalizeAdzunaJob(job, searchQuery = '') {
   const title = asCleanString(job?.title, 'Untitled Role');
   const company = asCleanString(job?.company?.display_name, 'Unknown Company');
-  const location = asCleanString(job?.location?.display_name || job?.location?.area?.join(', '), 'Location not specified');
+  const location = asCleanString(
+    job?.location?.display_name || job?.location?.area?.join(', '),
+    'Location not specified'
+  );
   const type = toTitleCase(job?.contract_type || job?.contract_time || 'Role');
   const description = asCleanString(job?.description);
   const haystack = `${title} ${company} ${description}`.toLowerCase();
@@ -99,7 +101,9 @@ function normalizeGreenhouseJob(job, boardToken, searchQuery = '') {
     location,
     type: 'Role',
     fit: buildFitLabel(searchQuery, haystack),
-    applyUrl: asCleanString(job?.absolute_url || `https://boards.greenhouse.io/${boardToken}/jobs/${job?.id}`) || undefined,
+    applyUrl:
+      asCleanString(job?.absolute_url || `https://boards.greenhouse.io/${boardToken}/jobs/${job?.id}`) ||
+      undefined,
     source: 'Greenhouse',
   };
 }
@@ -154,10 +158,12 @@ function buildRecommendedRoles(jobs) {
     })
   );
 
-  return (matchedRoles.length > 0 ? matchedRoles : keywordRules.slice(0, 3)).slice(0, 3).map((role) => ({
-    title: role.label,
-    reason: role.reason,
-  }));
+  return (matchedRoles.length > 0 ? matchedRoles : keywordRules.slice(0, 3))
+    .slice(0, 3)
+    .map((role) => ({
+      title: role.label,
+      reason: role.reason,
+    }));
 }
 
 async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPerPage = 50 } = {}) {
@@ -175,27 +181,12 @@ async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPe
     'content-type': 'application/json',
   });
 
-async function fetchAdzunaJobsForQueries({
-  queries = [],
-  location = '',
-  page = 1,
-  resultsPerPage = 50,
-} = {}) {
-  const settled = await Promise.allSettled(
-    queries.map((search) =>
-      fetchAdzunaJobs({ search, location, page, resultsPerPage })
-    )
-  );
-
-  return settled
-    .filter((result) => result.status === 'fulfilled')
-    .flatMap((result) => result.value);
-}
-
   if (search) params.append('what', search);
   if (location) params.append('where', location);
 
-  const response = await fetch(`${ADZUNA_API_URL}/jobs/${ADZUNA_COUNTRY}/search/${page}?${params.toString()}`);
+  const response = await fetch(
+    `${ADZUNA_API_URL}/jobs/${ADZUNA_COUNTRY}/search/${page}?${params.toString()}`
+  );
 
   if (!response.ok) {
     throw new Error(`Adzuna request failed with status ${response.status}`);
@@ -203,6 +194,21 @@ async function fetchAdzunaJobsForQueries({
 
   const data = await response.json();
   return Array.isArray(data?.results) ? data.results : [];
+}
+
+async function fetchAdzunaJobsForQueries({
+  queries = [],
+  location = '',
+  page = 1,
+  resultsPerPage = 50,
+} = {}) {
+  const settled = await Promise.allSettled(
+    queries.map((search) => fetchAdzunaJobs({ search, location, page, resultsPerPage }))
+  );
+
+  return settled
+    .filter((result) => result.status === 'fulfilled')
+    .flatMap((result) => result.value);
 }
 
 async function fetchGreenhouseJobs({ search = '', location = '' } = {}) {
@@ -265,11 +271,10 @@ function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = 
     const matchesFilter =
       filter === 'All' ||
       (filter === 'Internship' && (filterHaystack.includes('intern') || filterHaystack.includes('internship'))) ||
-      (filter === 'Remote' && (
-        filterHaystack.includes('remote') ||
-        filterHaystack.includes('work from home') ||
-        filterHaystack.includes('hybrid')
-      ));
+      (filter === 'Remote' &&
+        (filterHaystack.includes('remote') ||
+          filterHaystack.includes('work from home') ||
+          filterHaystack.includes('hybrid')));
 
     return matchesSearch && matchesLocation && matchesFilter;
   });
@@ -300,20 +305,12 @@ app.get('/jobs/recommended', async (req, res) => {
       fetchLeverJobs({ search: 'intern' }),
     ]);
 
-    const greenhouseJobs =
-      greenhouseResult.status === 'fulfilled' ? greenhouseResult.value : [];
-    const leverJobs =
-      leverResult.status === 'fulfilled' ? leverResult.value : [];
+    const greenhouseJobs = greenhouseResult.status === 'fulfilled' ? greenhouseResult.value : [];
+    const leverJobs = leverResult.status === 'fulfilled' ? leverResult.value : [];
 
-    const adzunaJobs = adzunaRawJobs.map((job) =>
-      normalizeAdzunaJob(job, 'software engineer intern')
-    );
+    const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, 'software engineer intern'));
 
-    const mergedJobs = mergeAndDedupeJobs([
-      adzunaJobs,
-      greenhouseJobs,
-      leverJobs,
-    ]);
+    const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
 
     const recommendedJobs = mergedJobs
       .filter((job) => {
@@ -389,9 +386,7 @@ app.get('/jobs/search', async (req, res) => {
       fetchLeverJobs({ search: query, location }),
     ]);
 
-    const adzunaJobs = adzunaRawJobs.map((job) =>
-      normalizeAdzunaJob(job, searchQueries[0] || query)
-    );
+    const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, searchQueries[0] || query));
 
     const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
     const jobs = applyJobFilters(mergedJobs, { search: query, location, filter }).slice(0, 50);
@@ -522,14 +517,12 @@ SCORING RUBRIC:
 - Language and Professionalism: score out of 20
 - Career Alignment / Impact: score out of 15
 
- 
 RESUME TIER RULES:
 - Gold = 85 to 100
 - Silver = 70 to 84
 - Bronze = below 70
 - Resume tier must be based on the overall score
 
- 
 VERY IMPORTANT RULES:
 - The total score must equal the sum of the 5 category scores
 - Total score must be out of 100
