@@ -51,7 +51,11 @@ function buildFitLabel(searchQuery, haystack) {
     return 'High Match';
   }
 
-  if (normalizedQuery.split(/\s+/).some((word) => word.length > 2 && haystack.includes(word))) {
+  if (
+    normalizedQuery
+      .split(/\s+/)
+      .some((word) => word.length > 2 && haystack.includes(word))
+  ) {
     return 'Potential Match';
   }
 
@@ -164,6 +168,125 @@ function buildRecommendedRoles(jobs) {
       title: role.label,
       reason: role.reason,
     }));
+}
+
+function normalizeStringList(value, { max = 8 } = {}) {
+  const cleaned = Array.isArray(value)
+    ? value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean)
+    : [];
+
+  return Array.from(new Set(cleaned)).slice(0, max);
+}
+
+function inferResumeJobProfile(resumeText = '') {
+  const lowerText = asCleanString(resumeText).toLowerCase();
+
+  if (/(meteorology|atmospheric science|weather|climate|forecast)/i.test(lowerText)) {
+    return {
+      careerPaths: [
+        'Meteorology Intern',
+        'Atmospheric Science Intern',
+        'Climate Data Analyst',
+        'Weather Research Assistant',
+      ],
+      jobKeywords: [
+        'meteorology',
+        'atmospheric science',
+        'weather',
+        'climate',
+        'forecasting',
+        'environmental data',
+        'gis',
+      ],
+      recommendedSearchTerms: [
+        'meteorology intern',
+        'atmospheric science intern',
+        'weather analyst intern',
+        'climate research assistant',
+        'environmental data analyst intern',
+      ],
+    };
+  }
+
+  if (/(computer science|software|java|python|c\+\+|react|frontend|backend|full stack)/i.test(lowerText)) {
+    return {
+      careerPaths: [
+        'Software Engineering Intern',
+        'Frontend / Full-Stack Intern',
+        'Data / Analytics Intern',
+      ],
+      jobKeywords: [
+        'software engineering',
+        'frontend',
+        'backend',
+        'full stack',
+        'python',
+        'java',
+        'data analysis',
+      ],
+      recommendedSearchTerms: [
+        'software engineer intern',
+        'frontend developer intern',
+        'full stack developer intern',
+        'backend developer intern',
+        'data analyst intern',
+      ],
+    };
+  }
+
+  if (/(data science|statistics|analytics|sql|machine learning|business analytics)/i.test(lowerText)) {
+    return {
+      careerPaths: [
+        'Data Analyst Intern',
+        'Business Analytics Intern',
+        'Research / Data Assistant',
+      ],
+      jobKeywords: [
+        'data analysis',
+        'analytics',
+        'statistics',
+        'sql',
+        'machine learning',
+        'reporting',
+      ],
+      recommendedSearchTerms: [
+        'data analyst intern',
+        'business analyst intern',
+        'analytics intern',
+        'research data assistant',
+      ],
+    };
+  }
+
+  return {
+    careerPaths: ['General Internship', 'Research Assistant', 'Entry-Level Analyst'],
+    jobKeywords: ['internship', 'research', 'analysis'],
+    recommendedSearchTerms: ['internship', 'research assistant', 'entry level analyst'],
+  };
+}
+
+function enrichResumeAnalysis(parsed, resumeText = '') {
+  if (!parsed || parsed.isResume !== true) {
+    return parsed;
+  }
+
+  const fallbackProfile = inferResumeJobProfile(resumeText);
+
+  const careerPaths = normalizeStringList(parsed.careerPaths, { max: 5 });
+  const jobKeywords = normalizeStringList(parsed.jobKeywords, { max: 8 });
+  const recommendedSearchTerms = normalizeStringList(parsed.recommendedSearchTerms, { max: 6 });
+
+  return {
+    ...parsed,
+    careerPaths: careerPaths.length > 0 ? careerPaths : fallbackProfile.careerPaths,
+    jobKeywords: jobKeywords.length > 0 ? jobKeywords : fallbackProfile.jobKeywords,
+    recommendedSearchTerms:
+      recommendedSearchTerms.length > 0
+        ? recommendedSearchTerms
+        : fallbackProfile.recommendedSearchTerms,
+  };
 }
 
 async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPerPage = 50 } = {}) {
@@ -282,57 +405,48 @@ function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = 
 
 app.get('/jobs/recommended', async (req, res) => {
   try {
-    const searches = [
-      'software engineer intern',
-      'software developer intern',
-      'frontend developer intern',
-      'frontend engineer intern',
-      'full stack developer intern',
-      'backend developer intern',
-      'data analyst intern',
-      'python intern',
-      'remote software engineer intern',
-      'remote frontend intern',
-    ];
+    const searchTermsParam = asCleanString(req.query.searchTerms);
+    const searchTerms = searchTermsParam
+      ? searchTermsParam
+          .split(',')
+          .map((term) => term.trim())
+          .filter(Boolean)
+          .slice(0, 6)
+      : [
+          'software engineer intern',
+          'software developer intern',
+          'frontend developer intern',
+          'frontend engineer intern',
+          'full stack developer intern',
+          'data analyst intern',
+        ];
 
     const adzunaRawJobs = await fetchAdzunaJobsForQueries({
-      queries: searches,
+      queries: searchTerms,
       resultsPerPage: 20,
     });
 
     const [greenhouseResult, leverResult] = await Promise.allSettled([
-      fetchGreenhouseJobs({ search: 'intern' }),
-      fetchLeverJobs({ search: 'intern' }),
+      fetchGreenhouseJobs({ search: searchTerms[0] || 'intern' }),
+      fetchLeverJobs({ search: searchTerms[0] || 'intern' }),
     ]);
 
     const greenhouseJobs = greenhouseResult.status === 'fulfilled' ? greenhouseResult.value : [];
     const leverJobs = leverResult.status === 'fulfilled' ? leverResult.value : [];
 
-    const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, 'software engineer intern'));
+    const adzunaJobs = adzunaRawJobs.map((job) =>
+      normalizeAdzunaJob(job, searchTerms[0] || 'intern')
+    );
 
     const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
 
     const recommendedJobs = mergedJobs
-      .filter((job) => {
-        const text = `${job.title} ${job.type} ${job.location} ${job.description || ''}`.toLowerCase();
-        return (
-          text.includes('intern') ||
-          text.includes('internship') ||
-          text.includes('software') ||
-          text.includes('developer') ||
-          text.includes('engineer') ||
-          text.includes('frontend') ||
-          text.includes('backend') ||
-          text.includes('full stack') ||
-          text.includes('analyst') ||
-          text.includes('data') ||
-          text.includes('python')
-        );
-      })
       .filter((job) => job.applyUrl)
       .slice(0, 30);
 
-    const roles = recommendedJobs.length > 0 ? buildRecommendedRoles(recommendedJobs) : [];
+    const roles = recommendedJobs.length > 0
+      ? buildRecommendedRoles(recommendedJobs)
+      : [];
 
     res.json({
       roles,
@@ -360,18 +474,14 @@ app.get('/jobs/search', async (req, res) => {
       searchQueries = [
         `${query} intern`,
         `${query} internship`,
-        'software engineer intern',
-        'software developer intern',
-        'frontend developer intern',
-        'data analyst intern',
+        `${query} student`,
+        `${query} assistant`,
       ];
     } else if (filter === 'Remote') {
       searchQueries = [
         `remote ${query}`,
         `${query} remote`,
-        'remote software engineer',
-        'remote frontend developer',
-        'remote data analyst',
+        `hybrid ${query}`,
       ];
     }
 
@@ -386,7 +496,9 @@ app.get('/jobs/search', async (req, res) => {
       fetchLeverJobs({ search: query, location }),
     ]);
 
-    const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, searchQueries[0] || query));
+    const adzunaJobs = adzunaRawJobs.map((job) =>
+      normalizeAdzunaJob(job, searchQueries[0] || query)
+    );
 
     const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
     const jobs = applyJobFilters(mergedJobs, { search: query, location, filter }).slice(0, 50);
@@ -507,7 +619,10 @@ If the uploaded document IS a resume, you MUST return ONLY valid JSON in exactly
     "outcome": "string"
   },
   "recommendations": ["string", "string", "string"],
-  "additionalNotes": "string"
+  "additionalNotes": "string",
+  "careerPaths": ["string", "string", "string"],
+  "jobKeywords": ["string", "string", "string"],
+  "recommendedSearchTerms": ["string", "string", "string"]
 }
 
 SCORING RUBRIC:
@@ -574,8 +689,23 @@ Recommendations:
 Additional Notes:
 - Mention inconsistencies, typos, spelling issues, formatting mismatches, or say clearly if there are no major issues
 
+Career Paths:
+- Provide 3 to 5 likely internship or early-career paths based on the actual resume
+- These should reflect the student's major, skills, projects, coursework, and experience
+
+Job Keywords:
+- Provide 4 to 8 useful job-search keywords based on the actual resume
+- Include field-specific terms, technical terms, and likely role-related keywords
+
+Recommended Search Terms:
+- Provide 3 to 6 realistic job search phrases the app can use to find relevant openings
+- These should be specific to the uploaded resume, not generic defaults
+
 JSON QUALITY RULES:
 - Every section object must contain all 5 keys: intro, highImpact, mediumImpact, recruiterInsight, outcome
+- careerPaths must contain 3 to 5 strings
+- jobKeywords must contain 4 to 8 strings
+- recommendedSearchTerms must contain 3 to 6 strings
 - highImpact must contain at least 2 objects
 - mediumImpact must contain at least 1 object
 - Each issue and fix must be specific to the uploaded resume, not generic advice
@@ -596,6 +726,7 @@ ${resumeText}
     let parsed;
     try {
       parsed = JSON.parse(rawText);
+      parsed = enrichResumeAnalysis(parsed, resumeText);
       console.log('PARSED AI JSON:', JSON.stringify(parsed, null, 2));
     } catch (parseError) {
       console.error('JSON parse error:', parseError);
