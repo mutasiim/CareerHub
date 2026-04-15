@@ -589,39 +589,83 @@ app.get('/jobs/search', async (req, res) => {
           searchTermsParam
             .split(',')
             .map((term) => term.trim())
-            .filter(Boolean),
-          10
+            .filter(Boolean)
+            .flatMap((term) => buildSearchVariants(term, filter)),
+          12
         )
       : buildSearchVariants(query || 'internship', filter);
 
-    const [adzunaRawJobs, greenhouseJobs, leverJobs] = await Promise.all([
-      fetchAdzunaJobsForQueries({
-        queries: searchQueries,
+    let adzunaRawJobs = await fetchAdzunaJobsForQueries({
+      queries: searchQueries,
+      location,
+      page,
+      resultsPerPage: 30,
+    });
+
+    if (adzunaRawJobs.length === 0 && searchTermsParam) {
+      const fallbackQueries = uniqueNonEmptyStrings(
+        searchTermsParam
+          .split(',')
+          .map((term) => term.trim())
+          .filter(Boolean)
+          .flatMap((term) => buildSearchVariants(term, 'All')),
+        12
+      );
+
+      adzunaRawJobs = await fetchAdzunaJobsForQueries({
+        queries: fallbackQueries,
         location,
         page,
         resultsPerPage: 30,
-      }),
+      });
+    }
+
+    const [greenhouseJobs, leverJobs] = await Promise.all([
       fetchGreenhouseJobs({ search: searchQueries[0] || query || 'intern', location }),
       fetchLeverJobs({ search: searchQueries[0] || query || 'intern', location }),
     ]);
 
     const adzunaJobs = adzunaRawJobs.map((job) =>
-      normalizeAdzunaJob(job, searchQueries[0] || query || 'intern')
+      normalizeAdzunaJob(job, query || searchQueries[0] || 'intern')
     );
 
     const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
 
-    const filterSearchBase = query || searchQueries.join(' ');
-    const jobs = applyJobFilters(mergedJobs, {
-      search: filterSearchBase,
-      location,
-      filter,
-    }).slice(0, 50);
+    const jobs = mergedJobs.filter((job) => {
+  const haystack =
+    `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+
+  const matchesSearch =
+    !query ||
+    haystack.includes(query.toLowerCase()) ||
+    searchQueries.some((term) => haystack.includes(term.toLowerCase()));
+
+  const matchesLocation =
+    !location || job.location.toLowerCase().includes(location.toLowerCase());
+
+  const filterHaystack =
+    `${job.title} ${job.type} ${job.location} ${job.description || ''}`.toLowerCase();
+
+  const matchesFilter =
+    filter === 'All' ||
+    (filter === 'Internship' &&
+      (filterHaystack.includes('intern') ||
+        filterHaystack.includes('internship') ||
+        filterHaystack.includes('student') ||
+        filterHaystack.includes('assistant'))) ||
+    (filter === 'Remote' &&
+      (filterHaystack.includes('remote') ||
+        filterHaystack.includes('work from home') ||
+        filterHaystack.includes('hybrid')));
+
+  return matchesSearch && matchesLocation && matchesFilter;
+}).slice(0, 50);
 
     res.json({
       jobs,
       page,
       searchQueries,
+      totalFetched: mergedJobs.length,
     });
   } catch (error) {
     console.error('SEARCH JOBS ERROR:', error);
