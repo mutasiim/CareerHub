@@ -16,7 +16,12 @@ export default function RootLayout() {
   return (
     <ResumeProvider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            headerBackButtonDisplayMode: 'minimal',
+          }}
+        >
   <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
   <Stack.Screen
@@ -34,8 +39,17 @@ export default function RootLayout() {
   />
 
   <Stack.Screen
+    name="jobs"
+    options={{
+      headerShown: false,
+    }}
+  />
+
+  <Stack.Screen
     name="modal"
     options={{
+      headerShown: true,
+      headerBackButtonDisplayMode: 'minimal',
       presentation: 'modal',
       title: 'Modal',
     }}

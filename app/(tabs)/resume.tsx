@@ -52,7 +52,7 @@ export default function ResumeScreen() {
         throw new Error(data.error || 'Failed to analyze resume');
       }
 
-      setFeedback(data.result);
+      setFeedback(data);
       router.replace('/feedback');
     } catch (error: any) {
       console.error('ERROR:', error);

@@ -1,5 +1,18 @@
 import React, { createContext, useContext, useState } from 'react';
 
+type FeedbackItem = {
+  issue: string;
+  fix: string;
+};
+
+type FeedbackSection = {
+  intro: string;
+  highImpact: FeedbackItem[];
+  mediumImpact: FeedbackItem[];
+  recruiterInsight: string;
+  outcome: string;
+};
+
 export type ResumeFeedback =
   | {
       isResume: false;
@@ -8,7 +21,6 @@ export type ResumeFeedback =
   | {
       isResume: true;
       score: number;
-      atsScore: number;
       resumeTier: 'Gold' | 'Silver' | 'Bronze';
       scoreBreakdown: {
         overallImpression: number;
@@ -17,14 +29,15 @@ export type ResumeFeedback =
         languageAndProfessionalism: number;
         careerAlignmentImpact: number;
       };
-      overallImpression: string;
-      contentAndRelevance: string;
-      formattingAndVisualAppeal: string;
-      languageAndProfessionalism: string;
+      overallImpression: FeedbackSection;
+      contentAndRelevance: FeedbackSection;
+      formattingAndVisualAppeal: FeedbackSection;
+      languageAndProfessionalism: FeedbackSection;
       recommendations: string[];
       additionalNotes: string;
-      weakestBullet: string;
-      rewrittenBullet: string;
+      careerPaths: string[];
+      jobKeywords: string[];
+      recommendedSearchTerms: string[];
     };
 
 type ResumeContextType = {
