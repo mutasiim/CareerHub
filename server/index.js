@@ -62,6 +62,48 @@ function buildFitLabel(searchQuery, haystack) {
   return 'Good Match';
 }
 
+function matchesSearchText(search = '', haystack = '') {
+  const normalizedSearch = asCleanString(search).toLowerCase();
+  const normalizedHaystack = asCleanString(haystack).toLowerCase();
+
+  if (!normalizedSearch) return true;
+  if (normalizedHaystack.includes(normalizedSearch)) return true;
+
+  const words = normalizedSearch
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 3);
+
+  if (words.length === 0) return true;
+
+  const matchedWords = words.filter((word) => normalizedHaystack.includes(word));
+  return matchedWords.length >= Math.min(2, words.length);
+}
+
+function isInternshipJob(job) {
+  const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+
+  return (
+    haystack.includes('intern') ||
+    haystack.includes('internship') ||
+    haystack.includes('co-op') ||
+    haystack.includes('coop') ||
+    haystack.includes('student') ||
+    haystack.includes('summer intern')
+  );
+}
+
+function isRemoteJob(job) {
+  const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+
+  return (
+    haystack.includes('remote') ||
+    haystack.includes('work from home') ||
+    haystack.includes('wfh') ||
+    haystack.includes('hybrid')
+  );
+}
+
 function normalizeAdzunaJob(job, searchQuery = '') {
   const title = asCleanString(job?.title, 'Untitled Role');
   const company = asCleanString(job?.company?.display_name, 'Unknown Company');
@@ -465,8 +507,8 @@ async function fetchGreenhouseJobs({ search = '', location = '' } = {}) {
   );
 
   return responses.flat().filter((job) => {
-    const matchesSearch =
-      !search || `${job.title} ${job.company}`.toLowerCase().includes(search.toLowerCase());
+    const haystack = `${job.title} ${job.company} ${job.location} ${job.type}`.toLowerCase();
+    const matchesSearch = matchesSearchText(search, haystack);
     const matchesLocation =
       !location || job.location.toLowerCase().includes(location.toLowerCase());
     return matchesSearch && matchesLocation;
@@ -487,8 +529,8 @@ async function fetchLeverJobs({ search = '', location = '' } = {}) {
   );
 
   return responses.flat().filter((job) => {
-    const matchesSearch =
-      !search || `${job.title} ${job.company}`.toLowerCase().includes(search.toLowerCase());
+    const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+    const matchesSearch = matchesSearchText(search, haystack);
     const matchesLocation =
       !location || job.location.toLowerCase().includes(location.toLowerCase());
     return matchesSearch && matchesLocation;
@@ -507,31 +549,15 @@ function mergeAndDedupeJobs(jobLists) {
 
 function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = {}) {
   return jobs.filter((job) => {
-    const haystack =
-      `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
-    const matchesSearch = !search || haystack.includes(search.toLowerCase());
+    const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+    const matchesSearch = matchesSearchText(search, haystack);
     const matchesLocation =
       !location || job.location.toLowerCase().includes(location.toLowerCase());
-    const filterHaystack =
-      `${job.title} ${job.company} ${job.type} ${job.location} ${job.description || ''}`.toLowerCase();
-
-    const isInternship =
-      filterHaystack.includes('intern') ||
-      filterHaystack.includes('internship') ||
-      filterHaystack.includes('co-op') ||
-      filterHaystack.includes('coop') ||
-      filterHaystack.includes('student');
-
-    const isRemote =
-      filterHaystack.includes('remote') ||
-      filterHaystack.includes('work from home') ||
-      filterHaystack.includes('wfh') ||
-      filterHaystack.includes('hybrid');
 
     const matchesFilter =
       filter === 'All' ||
-      (filter === 'Internship' && isInternship) ||
-      (filter === 'Remote' && isRemote);
+      (filter === 'Internship' && isInternshipJob(job)) ||
+      (filter === 'Remote' && isRemoteJob(job));
 
     return matchesSearch && matchesLocation && matchesFilter;
   });
@@ -646,7 +672,7 @@ app.get('/jobs/search', async (req, res) => {
         ? requestedSearchTerms
         : query
         ? [query]
-        : ['internship'];
+        : ['software engineer', 'software developer', 'developer', 'engineer'];
 
     const searchQueries = uniqueNonEmptyStrings(
       baseSeedTerms.flatMap((term) => buildSearchVariants(term, filter)),
@@ -687,17 +713,28 @@ app.get('/jobs/search', async (req, res) => {
 
     const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
 
-    const relaxedSearch = query || requestedSearchTerms[0] || '';
+    const relaxedSearch = query || requestedSearchTerms[0] || searchQueries[0] || '';
 
-    const jobs = applyJobFilters(mergedJobs, {
+    let jobs = applyJobFilters(mergedJobs, {
       search: relaxedSearch,
       location,
       filter,
-    }).slice(0, 50);
+    });
+
+    if (jobs.length === 0 && filter !== 'All') {
+      jobs = applyJobFilters(mergedJobs, {
+        search: '',
+        location,
+        filter,
+      });
+    }
+
+    jobs = jobs.slice(0, 50);
 
     res.json({
       jobs,
       page,
+      filter,
       searchQueries,
       totalFetched: mergedJobs.length,
     });

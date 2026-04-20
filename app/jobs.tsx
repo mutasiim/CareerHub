@@ -121,6 +121,47 @@ export default function JobsScreen() {
   const [recommendedError, setRecommendedError] = useState<string | null>(null);
   const [browseError, setBrowseError] = useState<string | null>(null);
 
+  const fetchBrowseJobs = async (page: number) => {
+    const trimmedSearch = searchText.trim();
+    const trimmedLocation = locationText.trim();
+
+    const fallbackQueries = trimmedSearch
+      ? [trimmedSearch]
+      : ['software engineer', 'software developer', 'developer', 'engineer', 'technology'];
+
+    let lastJobs: JobOpening[] = [];
+
+    for (const query of fallbackQueries) {
+      const params = new URLSearchParams();
+
+      if (query.trim()) {
+        params.append('query', query.trim());
+      }
+
+      if (trimmedLocation) {
+        params.append('location', trimmedLocation);
+      }
+
+      params.append('page', String(page));
+
+      const data = await fetchJsonWithRetry(`${API_URL}/jobs/search?${params.toString()}`);
+
+      const jobs = Array.isArray(data?.jobs)
+        ? data.jobs.map(normalizeJob)
+        : Array.isArray(data)
+        ? data.map(normalizeJob)
+        : [];
+
+      if (jobs.length > 0) {
+        return jobs;
+      }
+
+      lastJobs = jobs;
+    }
+
+    return lastJobs;
+  };
+
   const resumeSearchTerms = useMemo(() => {
     if (!feedback || feedback.isResume !== true) {
       return [] as string[];
@@ -157,27 +198,6 @@ export default function JobsScreen() {
       : [];
   }, [feedback]);
 
-  const browseSearchTerms = useMemo(() => {
-    const combined = [
-      ...resumeSearchTerms,
-      ...resumeCareerPaths,
-      ...resumeJobKeywords,
-    ].filter((term): term is string => typeof term === 'string' && term.trim().length > 0);
-
-    return Array.from(new Set(combined)).slice(0, 12);
-  }, [resumeSearchTerms, resumeCareerPaths, resumeJobKeywords]);
-
-  const effectiveBrowseQuery = useMemo(() => {
-    if (searchText.trim()) {
-      return searchText.trim();
-    }
-
-    if (browseSearchTerms.length > 0) {
-      return browseSearchTerms[0];
-    }
-
-    return 'software engineer';
-  }, [searchText, browseSearchTerms]);
 
   const recommendedJobFallbackData = useMemo(() => {
     if (recommendedJobData.length > 0) {
@@ -307,33 +327,7 @@ export default function JobsScreen() {
         setBrowseLoading(true);
         setBrowseError(null);
 
-        const params = new URLSearchParams();
-        const filterQuerySuffix =
-          selectedFilter === 'Remote'
-            ? ' remote'
-            : selectedFilter === 'Internship'
-            ? ' internship'
-            : '';
-
-        if (searchText.trim()) {
-          params.append('query', `${searchText.trim()}${filterQuerySuffix}`.trim());
-        } else if (selectedFilter !== 'All' && effectiveBrowseQuery.trim()) {
-          params.append('query', `${effectiveBrowseQuery.trim()}${filterQuerySuffix}`.trim());
-        } else if (browseSearchTerms.length > 0) {
-          params.append('searchTerms', browseSearchTerms.join(','));
-        } else if (effectiveBrowseQuery.trim()) {
-          params.append('query', effectiveBrowseQuery.trim());
-        }
-        if (locationText.trim()) params.append('location', locationText.trim());
-        params.append('page', String(browsePage));
-
-        const data = await fetchJsonWithRetry(`${API_URL}/jobs/search?${params.toString()}`);
-
-        const jobs = Array.isArray(data?.jobs)
-          ? data.jobs.map(normalizeJob)
-          : Array.isArray(data)
-          ? data.map(normalizeJob)
-          : [];
+        const jobs = await fetchBrowseJobs(browsePage);
 
         if (!isMounted) return;
 
@@ -357,7 +351,7 @@ export default function JobsScreen() {
       isMounted = false;
       clearTimeout(timeout);
     };
-  }, [searchText, effectiveBrowseQuery, browseSearchTerms, locationText, selectedFilter, browsePage]);
+  }, [searchText, locationText, browsePage]);
   useEffect(() => {
     let isMounted = true;
 
@@ -420,38 +414,36 @@ export default function JobsScreen() {
       const normalizedSearch = searchText.trim().toLowerCase();
       const normalizedLocation = locationText.trim().toLowerCase();
 
-      const matchesSearch =
-        !normalizedSearch ||
-        `${job.title} ${job.company}`.toLowerCase().includes(normalizedSearch);
+      const haystack = `${job.title} ${job.company} ${job.type} ${job.location}`.toLowerCase();
+      const jobLocation = job.location.toLowerCase();
 
-      const matchesLocation =
-        !normalizedLocation || job.location.toLowerCase().includes(normalizedLocation);
+      const matchesSearch = !normalizedSearch || haystack.includes(normalizedSearch);
 
-      const filterHaystack = `${job.title} ${job.company} ${job.type} ${job.location}`.toLowerCase();
+      const matchesLocation = !normalizedLocation || jobLocation.includes(normalizedLocation);
 
       const isInternship =
-        filterHaystack.includes('intern') ||
-        filterHaystack.includes('internship') ||
-        filterHaystack.includes('co-op') ||
-        filterHaystack.includes('coop');
-
-      const isBadMatch =
-        filterHaystack.includes('assistant') ||
-        filterHaystack.includes('professor') ||
-        filterHaystack.includes('staff') ||
-        filterHaystack.includes('full time');
+        haystack.includes('intern') ||
+        haystack.includes('internship') ||
+        haystack.includes('co-op') ||
+        haystack.includes('coop') ||
+        haystack.includes('summer intern') ||
+        haystack.includes('student');
 
       const isRemote =
-        filterHaystack.includes('remote') ||
-        filterHaystack.includes('work from home') ||
-        filterHaystack.includes('wfh') ||
-        filterHaystack.includes('hybrid') ||
-        job.location.toLowerCase().includes('remote');
+        haystack.includes('remote') ||
+        haystack.includes('work from home') ||
+        haystack.includes('wfh') ||
+        haystack.includes('hybrid') ||
+        jobLocation.includes('remote') ||
+        jobLocation.includes('hybrid');
 
-      const matchesFilter =
-        selectedFilter === 'All' ||
-        (selectedFilter === 'Internship' && (isInternship || searchText.trim().length === 0)) ||
-        (selectedFilter === 'Remote' && (isRemote || searchText.trim().length === 0));
+      let matchesFilter = true;
+
+      if (selectedFilter === 'Internship') {
+        matchesFilter = isInternship;
+      } else if (selectedFilter === 'Remote') {
+        matchesFilter = isRemote;
+      }
 
       return matchesSearch && matchesLocation && matchesFilter;
     });
@@ -677,17 +669,13 @@ export default function JobsScreen() {
 
             {browseError && browseJobData.length === 0 ? (
               <Text style={styles.infoText}>
-                {browseSearchTerms.length > 0 && !searchText.trim()
-                  ? 'No jobs were returned for the current resume-based browse query right now. Try searching a broader title or typing your own search.'
-                  : browseError}
+                No jobs were returned right now. Try a different title, location, or filter.
               </Text>
             ) : null}
 
             {!browseLoading && !browseError && browseJobData.length === 0 ? (
               <Text style={styles.infoText}>
-                {browseSearchTerms.length > 0 && !searchText.trim()
-                  ? 'No resume-based browse jobs are available right now. Try searching a specific title or broadening the location filter.'
-                  : 'No browse jobs are available right now.'}
+                No browse jobs are available right now. Try searching a specific title or broadening the location filter.
               </Text>
             ) : null}
 
