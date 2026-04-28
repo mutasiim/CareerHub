@@ -49,10 +49,16 @@ function normalizeJob(job: any): JobOpening {
     id: asString(job?.id || job?._id || job?.jobId || job?.job_id) || undefined,
     title: asString(job?.title || job?.jobTitle || job?.job_title, 'Untitled Role'),
     company: asString(job?.company || job?.companyName || job?.company_name, 'Unknown Company'),
-    location: asString(job?.location || job?.jobLocation || job?.job_location, 'Location not specified'),
+    location: asString(
+      job?.location || job?.jobLocation || job?.job_location,
+      'Location not specified'
+    ),
     type: asString(job?.type || job?.employmentType || job?.employment_type, 'Role'),
     fit: asString(job?.fit || job?.matchLabel || job?.match_label) || undefined,
-    applyUrl: asString(job?.applyUrl || job?.apply_url || job?.url || job?.jobUrl || job?.job_url) || undefined,
+    applyUrl:
+      asString(
+        job?.applyUrl || job?.apply_url || job?.url || job?.jobUrl || job?.job_url
+      ) || undefined,
   };
 }
 
@@ -81,7 +87,9 @@ async function fetchJsonWithRetry(url: string, retries = 2): Promise<any> {
       }
 
       if (!response.ok) {
-        throw new Error(data?.error || data?.details || `Request failed with status ${response.status}`);
+        throw new Error(
+          data?.error || data?.details || `Request failed with status ${response.status}`
+        );
       }
 
       return data;
@@ -100,11 +108,9 @@ async function fetchJsonWithRetry(url: string, retries = 2): Promise<any> {
   throw lastError ?? new Error('Unable to reach the jobs service right now.');
 }
 
-
-
 export default function JobsScreen() {
   const navigation = useNavigation();
-  const { feedback } = useResume();
+  const { feedback, resumeRefreshKey } = useResume();
   const [activeTab, setActiveTab] = useState<'recommended' | 'browse'>('recommended');
   const [searchText, setSearchText] = useState('');
   const [locationText, setLocationText] = useState('');
@@ -120,47 +126,6 @@ export default function JobsScreen() {
   const [browseLoading, setBrowseLoading] = useState(false);
   const [recommendedError, setRecommendedError] = useState<string | null>(null);
   const [browseError, setBrowseError] = useState<string | null>(null);
-
-  const fetchBrowseJobs = async (page: number) => {
-    const trimmedSearch = searchText.trim();
-    const trimmedLocation = locationText.trim();
-
-    const fallbackQueries = trimmedSearch
-      ? [trimmedSearch]
-      : ['software engineer', 'software developer', 'developer', 'engineer', 'technology'];
-
-    let lastJobs: JobOpening[] = [];
-
-    for (const query of fallbackQueries) {
-      const params = new URLSearchParams();
-
-      if (query.trim()) {
-        params.append('query', query.trim());
-      }
-
-      if (trimmedLocation) {
-        params.append('location', trimmedLocation);
-      }
-
-      params.append('page', String(page));
-
-      const data = await fetchJsonWithRetry(`${API_URL}/jobs/search?${params.toString()}`);
-
-      const jobs = Array.isArray(data?.jobs)
-        ? data.jobs.map(normalizeJob)
-        : Array.isArray(data)
-        ? data.map(normalizeJob)
-        : [];
-
-      if (jobs.length > 0) {
-        return jobs;
-      }
-
-      lastJobs = jobs;
-    }
-
-    return lastJobs;
-  };
 
   const resumeSearchTerms = useMemo(() => {
     if (!feedback || feedback.isResume !== true) {
@@ -198,59 +163,179 @@ export default function JobsScreen() {
       : [];
   }, [feedback]);
 
-
-  const recommendedJobFallbackData = useMemo(() => {
-    if (recommendedJobData.length > 0) {
-      return recommendedJobData;
+  const resumeDrivenQueries = useMemo(() => {
+    if (!feedback || feedback.isResume !== true) {
+      return [] as string[];
     }
 
-    if (recommendedSuggestedJobs.length > 0) {
-      return recommendedSuggestedJobs;
-    }
+    return Array.from(
+      new Set(
+        [...resumeSearchTerms, ...resumeCareerPaths, ...resumeJobKeywords].filter(
+          (term): term is string => typeof term === 'string' && term.trim().length > 0
+        )
+      )
+    ).slice(0, 6);
+  }, [feedback, resumeSearchTerms, resumeCareerPaths, resumeJobKeywords, resumeRefreshKey]);
 
-    const recommendedTitles = [
-      ...recommendedRoleData.map((role) => role.title),
-      ...resumeCareerPaths,
-      ...resumeSearchTerms,
-      ...resumeJobKeywords,
-    ]
-      .map((value) => value.toLowerCase())
-      .filter((value) => value.length > 0);
+  const strongResumeQueries = useMemo(() => {
+    const blockedExactTerms = new Set([
+      'engineer',
+      'developer',
+      'intern',
+      'internship',
+      'remote',
+      'hybrid',
+      'technology',
+      'tech',
+      'student',
+      'assistant',
+      'specialist',
+      'professional',
+      'role',
+      'job',
+    ]);
 
-    if (recommendedTitles.length === 0) {
+    const strongTechWords = [
+      'software',
+      'computer',
+      'artificial',
+      'intelligence',
+      'ai',
+      'machine',
+      'learning',
+      'data',
+      'python',
+      'java',
+      'javascript',
+      'react',
+      'node',
+      'frontend',
+      'backend',
+      'full stack',
+      'web',
+      'cloud',
+      'sql',
+      'api',
+    ];
+
+    return resumeDrivenQueries.filter((term) => {
+      const lower = term.toLowerCase().trim();
+
+      if (!lower || blockedExactTerms.has(lower)) {
+        return false;
+      }
+
+      if (lower.split(/\s+/).length >= 2) {
+        return true;
+      }
+
+      return strongTechWords.some((word) => lower.includes(word));
+    });
+  }, [resumeDrivenQueries]);
+
+  const recommendedJobFallbackData = recommendedJobData;
+
+  const fetchBrowseJobs = async (page: number) => {
+    const trimmedSearch = searchText.trim();
+    const trimmedLocation = locationText.trim();
+    const relevantResumeQueries =
+      strongResumeQueries.length > 0 ? strongResumeQueries : resumeDrivenQueries;
+    const hasResumeDrivenQueries = relevantResumeQueries.length > 0;
+
+    const fallbackQueries = trimmedSearch
+      ? selectedFilter === 'Internship'
+        ? [
+            `${trimmedSearch} intern`,
+            `${trimmedSearch} internship`,
+            `${trimmedSearch} co-op`,
+            `${trimmedSearch} student`,
+            trimmedSearch,
+          ]
+        : selectedFilter === 'Remote'
+        ? [
+            `remote ${trimmedSearch}`,
+            `${trimmedSearch} remote`,
+            `hybrid ${trimmedSearch}`,
+            trimmedSearch,
+          ]
+        : [trimmedSearch]
+      : hasResumeDrivenQueries
+      ? selectedFilter === 'Internship'
+        ? relevantResumeQueries.flatMap((term) => [
+            `${term} intern`,
+            `${term} internship`,
+            `${term} co-op`,
+          ])
+        : selectedFilter === 'Remote'
+        ? relevantResumeQueries.flatMap((term) => [
+            `remote ${term}`,
+            `${term} remote`,
+            `hybrid ${term}`,
+          ])
+        : relevantResumeQueries
+      : [];
+
+    if (!trimmedSearch && !hasResumeDrivenQueries) {
       return [] as JobOpening[];
     }
 
-    const matches = browseJobData.filter((job) => {
-      const haystack = `${job.title} ${job.company} ${job.type}`.toLowerCase();
+    const allJobs: JobOpening[] = [];
+    const seenKeys = new Set<string>();
 
-      return recommendedTitles.some((term) => {
-        if (haystack.includes(term)) {
-          return true;
+    for (const query of fallbackQueries) {
+      const params = new URLSearchParams();
+
+      if (query.trim()) {
+        params.append('query', query.trim());
+      }
+
+      if (trimmedLocation) {
+        params.append('location', trimmedLocation);
+      }
+
+      params.append('page', String(page));
+
+      const data = await fetchJsonWithRetry(`${API_URL}/jobs/search?${params.toString()}`);
+
+      const jobs = Array.isArray(data?.jobs)
+        ? data.jobs.map(normalizeJob)
+        : Array.isArray(data)
+        ? data.map(normalizeJob)
+        : [];
+
+      for (const job of jobs) {
+        const uniqueKey =
+          job.applyUrl || `${job.id || 'job'}-${job.title}-${job.company}-${job.location}`;
+
+        if (!seenKeys.has(uniqueKey)) {
+          seenKeys.add(uniqueKey);
+          allJobs.push(job);
         }
+      }
+    }
 
-        const words = term.split(/\s+/).filter((word) => word.length >= 3);
-        const matchedWords = words.filter((word) => haystack.includes(word));
-        return words.length > 0 && matchedWords.length >= Math.min(2, words.length);
-      });
-    });
-
-    return matches.slice(0, 8);
-  }, [
-    recommendedJobData,
-    recommendedSuggestedJobs,
-    recommendedRoleData,
-    resumeCareerPaths,
-    resumeSearchTerms,
-    resumeJobKeywords,
-    browseJobData,
-  ]);
+    return allJobs;
+  };
 
   useEffect(() => {
     navigation.setOptions({
       headerShown: false,
     });
   }, [navigation]);
+
+  useEffect(() => {
+    setActiveTab('recommended');
+    setRecommendedRoleData([]);
+    setRecommendedJobData([]);
+    setRecommendedSuggestedJobs([]);
+    setBrowseJobData([]);
+    setRecommendedError(null);
+    setBrowseError(null);
+    setSearchText('');
+    setLocationText('');
+    setSelectedFilter('All');
+    setBrowsePage(1);
+  }, [resumeRefreshKey]);
 
   useEffect(() => {
     let isMounted = true;
@@ -304,7 +389,9 @@ export default function JobsScreen() {
         }
       } catch (error: any) {
         if (!isMounted) return;
-        setRecommendedError(error?.message || 'Unable to load recommended jobs right now. Please try again in a moment.');
+        setRecommendedError(
+          error?.message || 'Unable to load recommended jobs right now. Please try again in a moment.'
+        );
       } finally {
         if (isMounted) {
           setRecommendedLoading(false);
@@ -317,7 +404,7 @@ export default function JobsScreen() {
     return () => {
       isMounted = false;
     };
-  }, [resumeSearchTerms, resumeCareerPaths, resumeJobKeywords]);
+  }, [resumeSearchTerms, resumeCareerPaths, resumeJobKeywords, resumeRefreshKey]);
 
   useEffect(() => {
     let isMounted = true;
@@ -351,63 +438,40 @@ export default function JobsScreen() {
       isMounted = false;
       clearTimeout(timeout);
     };
-  }, [searchText, locationText, browsePage]);
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadRecommendedSuggestedJobs = async () => {
-      if (recommendedJobData.length > 0) {
-        setRecommendedSuggestedJobs([]);
-        return;
-      }
-
-      const recommendationTerms = [
-        ...recommendedRoleData.map((role) => role.title),
-        ...resumeCareerPaths,
-        ...resumeSearchTerms,
-        ...resumeJobKeywords,
-      ].filter((term): term is string => typeof term === 'string' && term.trim().length > 0);
-
-      const uniqueTerms = Array.from(new Set(recommendationTerms.map((term) => term.trim())));
-
-      if (uniqueTerms.length === 0) {
-        setRecommendedSuggestedJobs([]);
-        return;
-      }
-
-      try {
-        const params = new URLSearchParams();
-        params.append('searchTerms', uniqueTerms.slice(0, 8).join(','));
-        params.append('query', uniqueTerms[0]);
-        params.append('page', '1');
-
-        const data = await fetchJsonWithRetry(`${API_URL}/jobs/search?${params.toString()}`);
-
-        const jobs = Array.isArray(data?.jobs)
-          ? data.jobs.map(normalizeJob)
-          : Array.isArray(data)
-          ? data.map(normalizeJob)
-          : [];
-
-        if (!isMounted) return;
-
-        setRecommendedSuggestedJobs(jobs.slice(0, 8));
-      } catch {
-        if (!isMounted) return;
-        setRecommendedSuggestedJobs([]);
-      }
-    };
-
-    loadRecommendedSuggestedJobs();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [recommendedJobData, recommendedRoleData, resumeCareerPaths, resumeSearchTerms, resumeJobKeywords]);
+  }, [
+    searchText,
+    locationText,
+    selectedFilter,
+    browsePage,
+    resumeDrivenQueries,
+    strongResumeQueries,
+    resumeRefreshKey,
+  ]);
 
   useEffect(() => {
     setBrowsePage(1);
   }, [searchText, locationText, selectedFilter]);
+
+  const isRelevantToResume = (job: JobOpening) => {
+    if (strongResumeQueries.length === 0) {
+      return true;
+    }
+
+    const haystack = `${job.title} ${job.company} ${job.location} ${job.type}`.toLowerCase();
+
+    return strongResumeQueries.some((term) => {
+      const lower = term.toLowerCase();
+
+      if (haystack.includes(lower)) {
+        return true;
+      }
+
+      const words = lower.split(/\s+/).filter((word) => word.length >= 3);
+      const matchedWords = words.filter((word) => haystack.includes(word));
+
+      return words.length > 0 && matchedWords.length >= Math.min(2, words.length);
+    });
+  };
 
   const filteredBrowseJobs = useMemo(() => {
     return browseJobData.filter((job) => {
@@ -418,7 +482,6 @@ export default function JobsScreen() {
       const jobLocation = job.location.toLowerCase();
 
       const matchesSearch = !normalizedSearch || haystack.includes(normalizedSearch);
-
       const matchesLocation = !normalizedLocation || jobLocation.includes(normalizedLocation);
 
       const isInternship =
@@ -427,17 +490,21 @@ export default function JobsScreen() {
         haystack.includes('co-op') ||
         haystack.includes('coop') ||
         haystack.includes('summer intern') ||
-        haystack.includes('student');
+        haystack.includes('student') ||
+        haystack.includes('new grad intern');
 
       const isRemote =
         haystack.includes('remote') ||
         haystack.includes('work from home') ||
         haystack.includes('wfh') ||
         haystack.includes('hybrid') ||
+        haystack.includes('distributed') ||
+        haystack.includes('anywhere') ||
         jobLocation.includes('remote') ||
         jobLocation.includes('hybrid');
 
       let matchesFilter = true;
+      const matchesResumeRelevance = isRelevantToResume(job);
 
       if (selectedFilter === 'Internship') {
         matchesFilter = isInternship;
@@ -445,9 +512,9 @@ export default function JobsScreen() {
         matchesFilter = isRemote;
       }
 
-      return matchesSearch && matchesLocation && matchesFilter;
+      return matchesSearch && matchesLocation && matchesFilter && matchesResumeRelevance;
     });
-  }, [browseJobData, searchText, locationText, selectedFilter]);
+  }, [browseJobData, searchText, locationText, selectedFilter, strongResumeQueries]);
 
   const handleViewJob = async (job: JobOpening) => {
     if (!job.applyUrl) {
@@ -497,16 +564,10 @@ export default function JobsScreen() {
       <View style={styles.segmentedControl}>
         <Pressable
           onPress={() => setActiveTab('recommended')}
-          style={[
-            styles.segmentButton,
-            activeTab === 'recommended' && styles.segmentButtonActive,
-          ]}
+          style={[styles.segmentButton, activeTab === 'recommended' && styles.segmentButtonActive]}
         >
           <Text
-            style={[
-              styles.segmentText,
-              activeTab === 'recommended' && styles.segmentTextActive,
-            ]}
+            style={[styles.segmentText, activeTab === 'recommended' && styles.segmentTextActive]}
           >
             Recommended
           </Text>
@@ -516,9 +577,7 @@ export default function JobsScreen() {
           onPress={() => setActiveTab('browse')}
           style={[styles.segmentButton, activeTab === 'browse' && styles.segmentButtonActive]}
         >
-          <Text
-            style={[styles.segmentText, activeTab === 'browse' && styles.segmentTextActive]}
-          >
+          <Text style={[styles.segmentText, activeTab === 'browse' && styles.segmentTextActive]}>
             Browse
           </Text>
         </Pressable>
@@ -551,7 +610,8 @@ export default function JobsScreen() {
             {(resumeCareerPaths.length > 0
               ? resumeCareerPaths.map((path) => ({
                   title: path,
-                  reason: 'This role is being recommended based on your uploaded resume and detected career direction.',
+                  reason:
+                    'This role is being recommended based on your uploaded resume and detected career direction.',
                 }))
               : recommendedRoleData
             ).map((role, index) => (
@@ -636,6 +696,8 @@ export default function JobsScreen() {
                 <Pressable
                   key={filter}
                   onPress={() => {
+                    setBrowseJobData([]);
+                    setBrowseError(null);
                     setSelectedFilter(filter);
                     setBrowsePage(1);
                   }}
@@ -675,7 +737,8 @@ export default function JobsScreen() {
 
             {!browseLoading && !browseError && browseJobData.length === 0 ? (
               <Text style={styles.infoText}>
-                No browse jobs are available right now. Try searching a specific title or broadening the location filter.
+                No browse jobs are available right now. Upload a resume, wait for analysis to
+                finish, or search for a specific title.
               </Text>
             ) : null}
 
@@ -729,16 +792,22 @@ export default function JobsScreen() {
                   <TouchableOpacity
                     style={[
                       styles.paginationButton,
-                      (browsePage === maxBrowsePages || filteredBrowseJobs.length === 0) && styles.paginationButtonDisabled,
+                      (browsePage === maxBrowsePages || filteredBrowseJobs.length === 0) &&
+                        styles.paginationButtonDisabled,
                     ]}
                     activeOpacity={0.85}
-                    disabled={browsePage === maxBrowsePages || browseLoading || filteredBrowseJobs.length === 0}
+                    disabled={
+                      browsePage === maxBrowsePages ||
+                      browseLoading ||
+                      filteredBrowseJobs.length === 0
+                    }
                     onPress={() => setBrowsePage((current) => Math.min(maxBrowsePages, current + 1))}
                   >
                     <Text
                       style={[
                         styles.paginationButtonText,
-                        (browsePage === maxBrowsePages || filteredBrowseJobs.length === 0) && styles.paginationButtonTextDisabled,
+                        (browsePage === maxBrowsePages || filteredBrowseJobs.length === 0) &&
+                          styles.paginationButtonTextDisabled,
                       ]}
                     >
                       Next
