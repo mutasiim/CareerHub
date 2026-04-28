@@ -389,35 +389,54 @@ function buildSearchVariants(baseQuery = '', filter = 'All') {
 
   if (!normalized) {
     return filter === 'All'
-      ? ['internship', 'entry level analyst']
+      ? ['internship', 'entry level analyst', 'research assistant']
       : filter === 'Internship'
-      ? ['internship']
-      : ['remote internship'];
+      ? ['internship', 'research assistant']
+      : ['remote internship', 'remote analyst'];
   }
 
   const variants = [normalized];
 
   if (/(meteorology|atmospheric|weather|climate|forecast)/i.test(normalized)) {
-    variants.push('meteorology intern');
+    variants.push(
+      'meteorology intern',
+      'atmospheric science intern',
+      'weather intern',
+      'climate research intern',
+      'environmental data analyst'
+    );
   } else if (/(software|computer science|frontend|backend|full stack|developer|engineer|python|java|react|c\+\+)/i.test(normalized)) {
-    variants.push('software engineer intern');
+    variants.push(
+      'software engineer intern',
+      'software developer intern',
+      'frontend developer intern',
+      'data analyst intern'
+    );
   } else if (/(data|analytics|statistics|sql|machine learning|business analytics)/i.test(normalized)) {
-    variants.push('data analyst intern');
+    variants.push(
+      'data analyst intern',
+      'analytics intern',
+      'research data assistant',
+      'business analyst intern'
+    );
   }
 
-  const cleaned = uniqueNonEmptyStrings(variants, 3);
+  const cleaned = uniqueNonEmptyStrings(variants, 6);
 
   if (filter === 'Internship') {
     return uniqueNonEmptyStrings(
       cleaned.map((term) => (term.includes('intern') ? term : `${term} intern`)),
-      3
+      6
     );
   }
 
   if (filter === 'Remote') {
     return uniqueNonEmptyStrings(
-      cleaned.map((term) => (term.includes('remote') ? term : `remote ${term}`)),
-      3
+      cleaned.flatMap((term) => [
+        term.includes('remote') ? term : `remote ${term}`,
+        `hybrid ${term}`,
+      ]),
+      6
     );
   }
 
@@ -638,8 +657,8 @@ app.get('/jobs/recommended', async (req, res) => {
     });
 
     const adzunaRawJobs = await fetchAdzunaJobsForQueries({
-      queries: searchTerms.slice(0, 3),
-      resultsPerPage: 12,
+      queries: searchTerms.slice(0, 5),
+      resultsPerPage: 20,
     });
 
     const [greenhouseResult, leverResult] = await Promise.allSettled([
@@ -727,14 +746,14 @@ app.get('/jobs/search', async (req, res) => {
 
     const searchQueries = uniqueNonEmptyStrings(
       baseSeedTerms.flatMap((term) => buildSearchVariants(term, filter)),
-      4
+      6
     );
 
     let adzunaRawJobs = await fetchAdzunaJobsForQueries({
       queries: searchQueries,
       location,
       page,
-      resultsPerPage: 15,
+      resultsPerPage: 25,
     });
 
     if (adzunaRawJobs.length === 0 && filter !== 'All') {
