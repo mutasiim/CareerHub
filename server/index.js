@@ -32,6 +32,9 @@ const LEVER_BOARDS = (process.env.LEVER_BOARDS || '')
   .map((value) => value.trim())
   .filter(Boolean);
 
+const JOB_CACHE_TTL_MS = 1000 * 60 * 20;
+const jobCache = new Map();
+
 function asCleanString(value, fallback = '') {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
 }
@@ -41,6 +44,46 @@ function toTitleCase(value) {
     .toLowerCase()
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function normalizeForDedupe(value = '') {
+  return asCleanString(value)
+    .toLowerCase()
+    .replace(/\b(internship|intern|co-op|coop|remote|hybrid|full-time|full time|part-time|part time)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getJobDedupeKey(job) {
+  const company = normalizeForDedupe(job?.company || '');
+  const title = normalizeForDedupe(job?.title || '');
+
+  return `${company}-${title}`;
+}
+
+function getCacheKey(namespace, payload = {}) {
+  return `${namespace}:${JSON.stringify(payload)}`;
+}
+
+function getCachedValue(key) {
+  const cached = jobCache.get(key);
+
+  if (!cached) return null;
+
+  if (Date.now() - cached.createdAt > JOB_CACHE_TTL_MS) {
+    jobCache.delete(key);
+    return null;
+  }
+
+  return cached.value;
+}
+
+function setCachedValue(key, value) {
+  jobCache.set(key, {
+    createdAt: Date.now(),
+    value,
+  });
 }
 
 function buildFitLabel(searchQuery, haystack) {
@@ -343,75 +386,38 @@ function uniqueNonEmptyStrings(values, max = 10) {
 
 function buildSearchVariants(baseQuery = '', filter = 'All') {
   const normalized = asCleanString(baseQuery).toLowerCase();
-  const variants = [];
 
   if (!normalized) {
     return filter === 'All'
-      ? ['internship', 'entry level analyst', 'research assistant']
+      ? ['internship', 'entry level analyst']
       : filter === 'Internship'
-      ? ['internship', 'student assistant', 'research assistant']
-      : ['remote internship', 'remote analyst', 'remote assistant'];
+      ? ['internship']
+      : ['remote internship'];
   }
 
-  variants.push(normalized);
-
-  const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length > 1) {
-    words.forEach((word) => {
-      if (word.length > 2) {
-        variants.push(word);
-      }
-    });
-  }
+  const variants = [normalized];
 
   if (/(meteorology|atmospheric|weather|climate|forecast)/i.test(normalized)) {
-    variants.push(
-      'meteorology',
-      'atmospheric science',
-      'weather',
-      'climate',
-      'forecasting',
-      'environmental data analyst'
-    );
+    variants.push('meteorology intern');
+  } else if (/(software|computer science|frontend|backend|full stack|developer|engineer|python|java|react|c\+\+)/i.test(normalized)) {
+    variants.push('software engineer intern');
+  } else if (/(data|analytics|statistics|sql|machine learning|business analytics)/i.test(normalized)) {
+    variants.push('data analyst intern');
   }
 
-  if (
-    /(software|computer science|frontend|backend|full stack|developer|engineer|python|java|react|c\+\+)/i.test(
-      normalized
-    )
-  ) {
-    variants.push(
-      'software engineer',
-      'software developer',
-      'frontend developer',
-      'backend developer',
-      'full stack developer',
-      'data analyst'
-    );
-  }
-
-  if (/(data|analytics|statistics|sql|machine learning|business analytics)/i.test(normalized)) {
-    variants.push('data analyst', 'analytics', 'business analyst', 'research assistant', 'data science');
-  }
-
-  const cleaned = uniqueNonEmptyStrings(variants, 8);
+  const cleaned = uniqueNonEmptyStrings(variants, 3);
 
   if (filter === 'Internship') {
     return uniqueNonEmptyStrings(
-      cleaned.flatMap((term) => [
-        `${term} intern`,
-        `${term} internship`,
-        `${term} student`,
-        `${term} assistant`,
-      ]),
-      10
+      cleaned.map((term) => (term.includes('intern') ? term : `${term} intern`)),
+      3
     );
   }
 
   if (filter === 'Remote') {
     return uniqueNonEmptyStrings(
-      cleaned.flatMap((term) => [`remote ${term}`, `${term} remote`, `hybrid ${term}`]),
-      10
+      cleaned.map((term) => (term.includes('remote') ? term : `remote ${term}`)),
+      3
     );
   }
 
@@ -426,18 +432,18 @@ function buildRoleRecommendationsFromCareerPaths(careerPaths = []) {
 }
 
 function buildRecommendedSearchInputs({ searchTerms = [], careerPaths = [], jobKeywords = [] } = {}) {
-  const baseTerms = uniqueNonEmptyStrings([...searchTerms, ...careerPaths, ...jobKeywords], 12);
+  const baseTerms = uniqueNonEmptyStrings([...searchTerms, ...careerPaths, ...jobKeywords], 5);
 
   if (baseTerms.length === 0) {
     return {
-      searchTerms: ['software engineer intern', 'data analyst intern', 'frontend developer intern'],
+      searchTerms: ['software engineer intern', 'data analyst intern'],
       primaryQuery: 'software engineer intern',
     };
   }
 
   const expandedTerms = uniqueNonEmptyStrings(
     baseTerms.flatMap((term) => buildSearchVariants(term, 'Internship')),
-    12
+    5
   );
 
   return {
@@ -482,8 +488,10 @@ async function fetchAdzunaJobsForQueries({
   page = 1,
   resultsPerPage = 50,
 } = {}) {
+  const safeQueries = uniqueNonEmptyStrings(queries, 5);
+
   const settled = await Promise.allSettled(
-    queries.map((search) => fetchAdzunaJobs({ search, location, page, resultsPerPage }))
+    safeQueries.map((search) => fetchAdzunaJobs({ search, location, page, resultsPerPage }))
   );
 
   return settled
@@ -539,12 +547,28 @@ async function fetchLeverJobs({ search = '', location = '' } = {}) {
 
 function mergeAndDedupeJobs(jobLists) {
   const merged = jobLists.flat().filter((job) => job && job.title && job.company);
+  const deduped = new Map();
 
-  return Array.from(
-    new Map(
-      merged.map((job) => [job.applyUrl || `${job.title}-${job.company}-${job.location}`, job])
-    ).values()
-  );
+  for (const job of merged) {
+    const key = getJobDedupeKey(job);
+
+    if (!key || key === '-') continue;
+
+    if (!deduped.has(key)) {
+      deduped.set(key, job);
+      continue;
+    }
+
+    const existing = deduped.get(key);
+    const existingHasApplyUrl = Boolean(existing?.applyUrl);
+    const nextHasApplyUrl = Boolean(job?.applyUrl);
+
+    if (!existingHasApplyUrl && nextHasApplyUrl) {
+      deduped.set(key, job);
+    }
+  }
+
+  return Array.from(deduped.values());
 }
 
 function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = {}) {
@@ -568,6 +592,17 @@ app.get('/jobs/recommended', async (req, res) => {
     const searchTermsParam = asCleanString(req.query.searchTerms);
     const careerPathsParam = asCleanString(req.query.careerPaths);
     const jobKeywordsParam = asCleanString(req.query.jobKeywords);
+
+    const cacheKey = getCacheKey('recommended', {
+      searchTerms: searchTermsParam.toLowerCase(),
+      careerPaths: careerPathsParam.toLowerCase(),
+      jobKeywords: jobKeywordsParam.toLowerCase(),
+    });
+
+    const cachedResponse = getCachedValue(cacheKey);
+    if (cachedResponse) {
+      return res.json(cachedResponse);
+    }
 
     const rawSearchTerms = searchTermsParam
       ? searchTermsParam
@@ -603,8 +638,8 @@ app.get('/jobs/recommended', async (req, res) => {
     });
 
     const adzunaRawJobs = await fetchAdzunaJobsForQueries({
-      queries: searchTerms,
-      resultsPerPage: 20,
+      queries: searchTerms.slice(0, 3),
+      resultsPerPage: 12,
     });
 
     const [greenhouseResult, leverResult] = await Promise.allSettled([
@@ -634,12 +669,15 @@ app.get('/jobs/recommended', async (req, res) => {
         ? buildRecommendedRoles(recommendedJobs)
         : buildRoleRecommendationsFromCareerPaths(rawSearchTerms);
 
-    res.json({
+    const responsePayload = {
       roles,
       jobs: recommendedJobs,
       searchTerms,
       primaryQuery,
-    });
+    };
+
+    setCachedValue(cacheKey, responsePayload);
+    res.json(responsePayload);
   } catch (error) {
     console.error('RECOMMENDED JOBS ERROR:', error);
     res.status(500).json({
@@ -657,46 +695,59 @@ app.get('/jobs/search', async (req, res) => {
     const page = Number.parseInt(asCleanString(req.query.page, '1'), 10) || 1;
     const searchTermsParam = asCleanString(req.query.searchTerms);
 
+    const cacheKey = getCacheKey('search', {
+      query: query.toLowerCase(),
+      location: location.toLowerCase(),
+      filter,
+      page,
+      searchTerms: searchTermsParam.toLowerCase(),
+    });
+
+    const cachedResponse = getCachedValue(cacheKey);
+    if (cachedResponse) {
+      return res.json(cachedResponse);
+    }
+
     const requestedSearchTerms = searchTermsParam
       ? uniqueNonEmptyStrings(
           searchTermsParam
             .split(',')
             .map((term) => term.trim())
             .filter(Boolean),
-          12
+          5
         )
       : [];
 
     const baseSeedTerms =
       requestedSearchTerms.length > 0
-        ? requestedSearchTerms
+        ? requestedSearchTerms.slice(0, 3)
         : query
         ? [query]
-        : ['software engineer', 'software developer', 'developer', 'engineer'];
+        : ['software engineer'];
 
     const searchQueries = uniqueNonEmptyStrings(
       baseSeedTerms.flatMap((term) => buildSearchVariants(term, filter)),
-      12
+      4
     );
 
     let adzunaRawJobs = await fetchAdzunaJobsForQueries({
       queries: searchQueries,
       location,
       page,
-      resultsPerPage: 30,
+      resultsPerPage: 15,
     });
 
     if (adzunaRawJobs.length === 0 && filter !== 'All') {
       const relaxedQueries = uniqueNonEmptyStrings(
         baseSeedTerms.flatMap((term) => buildSearchVariants(term, 'All')),
-        12
+        3
       );
 
       adzunaRawJobs = await fetchAdzunaJobsForQueries({
         queries: relaxedQueries,
         location,
         page,
-        resultsPerPage: 30,
+        resultsPerPage: 10,
       });
     }
 
@@ -731,13 +782,16 @@ app.get('/jobs/search', async (req, res) => {
 
     jobs = jobs.slice(0, 50);
 
-    res.json({
+    const responsePayload = {
       jobs,
       page,
       filter,
       searchQueries,
       totalFetched: mergedJobs.length,
-    });
+    };
+
+    setCachedValue(cacheKey, responsePayload);
+    res.json(responsePayload);
   } catch (error) {
     console.error('SEARCH JOBS ERROR:', error);
     res.status(500).json({
