@@ -58,8 +58,10 @@ function normalizeForDedupe(value = '') {
 function getJobDedupeKey(job) {
   const company = normalizeForDedupe(job?.company || '');
   const title = normalizeForDedupe(job?.title || '');
+  const remoteStatus = isRemoteJob(job) ? 'remote' : 'onsite';
+  const internshipStatus = isInternshipJob(job) ? 'intern' : 'standard';
 
-  return `${company}-${title}`;
+  return `${company}-${title}-${remoteStatus}-${internshipStatus}`;
 }
 
 function getCacheKey(namespace, payload = {}) {
@@ -268,8 +270,9 @@ function normalizeStringList(value, { max = 8 } = {}) {
 function inferResumeJobProfile(resumeText = '') {
   const lowerText = asCleanString(resumeText).toLowerCase();
 
-  if (/(meteorology|atmospheric science|weather|climate|forecast)/i.test(lowerText)) {
-    return {
+  const domainRules = [
+    {
+      match: /(meteorology|atmospheric science|atmospheric|weather|climate|forecast|gis|environmental science)/i,
       careerPaths: [
         'Meteorology Intern',
         'Atmospheric Science Intern',
@@ -290,13 +293,11 @@ function inferResumeJobProfile(resumeText = '') {
         'atmospheric science intern',
         'weather analyst intern',
         'climate research assistant',
-        'environmental data analyst intern',
+        'gis analyst',
       ],
-    };
-  }
-
-  if (/(computer science|software|java|python|c\+\+|react|frontend|backend|full stack)/i.test(lowerText)) {
-    return {
+    },
+    {
+      match: /(computer science|software|java|python|c\+\+|react|frontend|backend|full stack|web development|programming)/i,
       careerPaths: [
         'Software Engineering Intern',
         'Frontend / Full-Stack Intern',
@@ -318,11 +319,9 @@ function inferResumeJobProfile(resumeText = '') {
         'backend developer intern',
         'data analyst intern',
       ],
-    };
-  }
-
-  if (/(data science|statistics|analytics|sql|machine learning|business analytics)/i.test(lowerText)) {
-    return {
+    },
+    {
+      match: /(data science|statistics|analytics|sql|machine learning|business analytics|data analysis)/i,
       careerPaths: [
         'Data Analyst Intern',
         'Business Analytics Intern',
@@ -342,13 +341,143 @@ function inferResumeJobProfile(resumeText = '') {
         'analytics intern',
         'research data assistant',
       ],
+    },
+    {
+      match: /(biology|biological|biochemistry|biomedical|microbiology|genetics|neuroscience|life science)/i,
+      careerPaths: [
+        'Biology Research Assistant',
+        'Laboratory Intern',
+        'Clinical Research Intern',
+      ],
+      jobKeywords: [
+        'biology',
+        'laboratory',
+        'research',
+        'clinical research',
+        'life sciences',
+      ],
+      recommendedSearchTerms: [
+        'biology research assistant',
+        'laboratory intern',
+        'clinical research intern',
+        'life sciences intern',
+      ],
+    },
+    {
+      match: /(pharmacy|pharmaceutical|pharmacology|pre-pharmacy|medication)/i,
+      careerPaths: [
+        'Pharmacy Intern',
+        'Pharmaceutical Research Assistant',
+        'Clinical Support Intern',
+      ],
+      jobKeywords: [
+        'pharmacy',
+        'pharmaceutical',
+        'clinical support',
+        'medication',
+        'healthcare',
+      ],
+      recommendedSearchTerms: [
+        'pharmacy intern',
+        'pharmaceutical intern',
+        'clinical support intern',
+        'healthcare intern',
+      ],
+    },
+    {
+      match: /(marketing|communications|public relations|branding|social media|advertising)/i,
+      careerPaths: [
+        'Marketing Intern',
+        'Communications Intern',
+        'Social Media Intern',
+      ],
+      jobKeywords: [
+        'marketing',
+        'communications',
+        'branding',
+        'social media',
+        'content',
+      ],
+      recommendedSearchTerms: [
+        'marketing intern',
+        'communications intern',
+        'social media intern',
+        'content marketing intern',
+      ],
+    },
+    {
+      match: /(finance|accounting|economics|investment|financial analysis|banking)/i,
+      careerPaths: [
+        'Finance Intern',
+        'Accounting Intern',
+        'Financial Analyst Intern',
+      ],
+      jobKeywords: [
+        'finance',
+        'accounting',
+        'financial analysis',
+        'economics',
+        'banking',
+      ],
+      recommendedSearchTerms: [
+        'finance intern',
+        'accounting intern',
+        'financial analyst intern',
+        'banking intern',
+      ],
+    },
+    {
+      match: /(psychology|mental health|counseling|human services|behavioral)/i,
+      careerPaths: [
+        'Psychology Research Assistant',
+        'Behavioral Health Intern',
+        'Human Services Intern',
+      ],
+      jobKeywords: [
+        'psychology',
+        'mental health',
+        'behavioral health',
+        'research',
+        'human services',
+      ],
+      recommendedSearchTerms: [
+        'psychology research assistant',
+        'behavioral health intern',
+        'human services intern',
+        'mental health intern',
+      ],
+    },
+  ];
+
+  const matchedRule = domainRules.find((rule) => rule.match.test(lowerText));
+  if (matchedRule) {
+    return {
+      careerPaths: matchedRule.careerPaths,
+      jobKeywords: matchedRule.jobKeywords,
+      recommendedSearchTerms: matchedRule.recommendedSearchTerms,
     };
   }
 
+  const matchedKeywordPool = uniqueNonEmptyStrings(
+    [
+      ...(lowerText.includes('research') ? ['research assistant'] : []),
+      ...(lowerText.includes('lab') || lowerText.includes('laboratory') ? ['laboratory assistant'] : []),
+      ...(lowerText.includes('analysis') || lowerText.includes('analyst') ? ['analyst'] : []),
+      ...(lowerText.includes('design') ? ['design intern'] : []),
+      ...(lowerText.includes('education') || lowerText.includes('teaching') || lowerText.includes('tutor')
+        ? ['tutor', 'teaching assistant']
+        : []),
+    ],
+    5
+  );
+
   return {
-    careerPaths: ['General Internship', 'Research Assistant', 'Entry-Level Analyst'],
-    jobKeywords: ['internship', 'research', 'analysis'],
-    recommendedSearchTerms: ['internship', 'research assistant', 'entry level analyst'],
+    careerPaths: matchedKeywordPool.length > 0 ? matchedKeywordPool.map((term) => toTitleCase(term)) : ['General Internship', 'Research Assistant', 'Entry-Level Analyst'],
+    jobKeywords: matchedKeywordPool.length > 0 ? matchedKeywordPool : ['internship', 'research', 'analysis'],
+    recommendedSearchTerms:
+      matchedKeywordPool.length > 0
+        ? matchedKeywordPool.map((term) => (term.includes('intern') || term.includes('assistant') ? term : `${term} intern`))
+        : ['internship', 'research assistant', 'entry level analyst'],
   };
 }
 
@@ -392,32 +521,64 @@ function buildSearchVariants(baseQuery = '', filter = 'All') {
       ? ['internship', 'entry level analyst', 'research assistant']
       : filter === 'Internship'
       ? ['internship', 'research assistant']
-      : ['remote internship', 'remote analyst'];
+      : ['remote internship', 'remote analyst', 'hybrid analyst'];
   }
 
   const variants = [normalized];
 
-  if (/(meteorology|atmospheric|weather|climate|forecast)/i.test(normalized)) {
+  if (/(meteorology|atmospheric|weather|climate|forecast|gis|environmental)/i.test(normalized)) {
     variants.push(
       'meteorology intern',
       'atmospheric science intern',
       'weather intern',
-      'climate research intern',
-      'environmental data analyst'
+      'climate data analyst',
+      'environmental data analyst',
+      'gis analyst'
     );
   } else if (/(software|computer science|frontend|backend|full stack|developer|engineer|python|java|react|c\+\+)/i.test(normalized)) {
     variants.push(
       'software engineer intern',
       'software developer intern',
       'frontend developer intern',
+      'backend developer intern',
       'data analyst intern'
     );
   } else if (/(data|analytics|statistics|sql|machine learning|business analytics)/i.test(normalized)) {
     variants.push(
       'data analyst intern',
       'analytics intern',
-      'research data assistant',
-      'business analyst intern'
+      'business analyst intern',
+      'research data assistant'
+    );
+  } else if (/(biology|biological|biochemistry|biomedical|microbiology|genetics|neuroscience|life science)/i.test(normalized)) {
+    variants.push(
+      'biology research assistant',
+      'laboratory intern',
+      'clinical research intern'
+    );
+  } else if (/(pharmacy|pharmaceutical|pharmacology|medication|clinical support)/i.test(normalized)) {
+    variants.push(
+      'pharmacy intern',
+      'pharmaceutical intern',
+      'clinical support intern'
+    );
+  } else if (/(marketing|communications|branding|social media|content)/i.test(normalized)) {
+    variants.push(
+      'marketing intern',
+      'communications intern',
+      'social media intern'
+    );
+  } else if (/(finance|accounting|economics|financial|banking)/i.test(normalized)) {
+    variants.push(
+      'finance intern',
+      'accounting intern',
+      'financial analyst intern'
+    );
+  } else if (/(psychology|mental health|counseling|behavioral|human services)/i.test(normalized)) {
+    variants.push(
+      'psychology research assistant',
+      'behavioral health intern',
+      'human services intern'
     );
   }
 
@@ -425,7 +586,10 @@ function buildSearchVariants(baseQuery = '', filter = 'All') {
 
   if (filter === 'Internship') {
     return uniqueNonEmptyStrings(
-      cleaned.map((term) => (term.includes('intern') ? term : `${term} intern`)),
+      cleaned.flatMap((term) => [
+        term.includes('intern') ? term : `${term} intern`,
+        term.includes('internship') ? term : `${term} internship`,
+      ]),
       6
     );
   }
@@ -462,7 +626,7 @@ function buildRecommendedSearchInputs({ searchTerms = [], careerPaths = [], jobK
 
   const expandedTerms = uniqueNonEmptyStrings(
     baseTerms.flatMap((term) => buildSearchVariants(term, 'Internship')),
-    5
+    6
   );
 
   return {
@@ -657,8 +821,8 @@ app.get('/jobs/recommended', async (req, res) => {
     });
 
     const adzunaRawJobs = await fetchAdzunaJobsForQueries({
-      queries: searchTerms.slice(0, 5),
-      resultsPerPage: 20,
+      queries: searchTerms.slice(0, 4),
+      resultsPerPage: 18,
     });
 
     const [greenhouseResult, leverResult] = await Promise.allSettled([
@@ -759,14 +923,14 @@ app.get('/jobs/search', async (req, res) => {
     if (adzunaRawJobs.length === 0 && filter !== 'All') {
       const relaxedQueries = uniqueNonEmptyStrings(
         baseSeedTerms.flatMap((term) => buildSearchVariants(term, 'All')),
-        3
+        4
       );
 
       adzunaRawJobs = await fetchAdzunaJobsForQueries({
         queries: relaxedQueries,
         location,
         page,
-        resultsPerPage: 10,
+        resultsPerPage: 15,
       });
     }
 
