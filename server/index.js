@@ -49,8 +49,16 @@ function toTitleCase(value) {
 function normalizeForDedupe(value = '') {
   return asCleanString(value)
     .toLowerCase()
-    .replace(/\b(internship|intern|co-op|coop|remote|hybrid|full-time|full time|part-time|part time)\b/g, '')
+    .replace(/\b(internship|intern|co-op|coop|remote|hybrid|full-time|full time|part-time|part time|summer|fall|spring|2025|2026|2027)\b/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeForSearch(value = '') {
+  return asCleanString(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9+#.\s-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -58,10 +66,9 @@ function normalizeForDedupe(value = '') {
 function getJobDedupeKey(job) {
   const company = normalizeForDedupe(job?.company || '');
   const title = normalizeForDedupe(job?.title || '');
-  const remoteStatus = isRemoteJob(job) ? 'remote' : 'onsite';
-  const internshipStatus = isInternshipJob(job) ? 'intern' : 'standard';
+  const location = normalizeForDedupe(job?.location || '');
 
-  return `${company}-${title}-${remoteStatus}-${internshipStatus}`;
+  return `${company}-${title}-${location}`;
 }
 
 function getCacheKey(namespace, payload = {}) {
@@ -96,11 +103,17 @@ function buildFitLabel(searchQuery, haystack) {
     return 'High Match';
   }
 
-  if (
-    normalizedQuery
-      .split(/\s+/)
-      .some((word) => word.length > 2 && haystack.includes(word))
-  ) {
+  const words = normalizedQuery
+    .split(/\s+/)
+    .filter((word) => word.length > 2);
+
+  const matchedWords = words.filter((word) => haystack.includes(word));
+
+  if (matchedWords.length >= Math.min(2, words.length)) {
+    return 'High Match';
+  }
+
+  if (matchedWords.length > 0) {
     return 'Potential Match';
   }
 
@@ -108,8 +121,8 @@ function buildFitLabel(searchQuery, haystack) {
 }
 
 function matchesSearchText(search = '', haystack = '') {
-  const normalizedSearch = asCleanString(search).toLowerCase();
-  const normalizedHaystack = asCleanString(haystack).toLowerCase();
+  const normalizedSearch = normalizeForSearch(search);
+  const normalizedHaystack = normalizeForSearch(haystack);
 
   if (!normalizedSearch) return true;
   if (normalizedHaystack.includes(normalizedSearch)) return true;
@@ -128,25 +141,56 @@ function matchesSearchText(search = '', haystack = '') {
 function isInternshipJob(job) {
   const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
 
-  return (
-    haystack.includes('intern') ||
-    haystack.includes('internship') ||
-    haystack.includes('co-op') ||
-    haystack.includes('coop') ||
-    haystack.includes('student') ||
-    haystack.includes('summer intern')
-  );
+  const internshipKeywords = [
+    'intern',
+    'internship',
+    'summer intern',
+    'fall intern',
+    'spring intern',
+    'co-op',
+    'coop',
+    'co op',
+    'student',
+    'student trainee',
+    'work study',
+    'work-study',
+    'research assistant',
+    'lab assistant',
+  ];
+
+  return internshipKeywords.some((keyword) => haystack.includes(keyword));
 }
 
 function isRemoteJob(job) {
   const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
 
-  return (
-    haystack.includes('remote') ||
-    haystack.includes('work from home') ||
-    haystack.includes('wfh') ||
-    haystack.includes('hybrid')
-  );
+  const remoteKeywords = [
+    'remote',
+    'work from home',
+    'wfh',
+    'hybrid',
+    'distributed',
+    'anywhere',
+    'virtual',
+    'telework',
+    'telecommute',
+    'remote eligible',
+    'flexible location',
+  ];
+
+  return remoteKeywords.some((keyword) => haystack.includes(keyword));
+}
+
+function inferJobType({ title = '', type = '', description = '', location = '' } = {}) {
+  const haystack = `${title} ${type} ${description} ${location}`.toLowerCase();
+
+  if (isInternshipJob({ title, type, description, location, company: '' })) return 'Internship';
+  if (haystack.includes('part time') || haystack.includes('part-time')) return 'Part Time';
+  if (haystack.includes('full time') || haystack.includes('full-time')) return 'Full Time';
+  if (haystack.includes('contract')) return 'Contract';
+  if (isRemoteJob({ title, type, description, location, company: '' })) return 'Remote / Hybrid';
+
+  return 'Role';
 }
 
 function normalizeAdzunaJob(job, searchQuery = '') {
@@ -156,9 +200,10 @@ function normalizeAdzunaJob(job, searchQuery = '') {
     job?.location?.display_name || job?.location?.area?.join(', '),
     'Location not specified'
   );
-  const type = toTitleCase(job?.contract_type || job?.contract_time || 'Role');
   const description = asCleanString(job?.description);
-  const haystack = `${title} ${company} ${description}`.toLowerCase();
+  const rawType = asCleanString(job?.contract_type || job?.contract_time);
+  const type = rawType ? toTitleCase(rawType) : inferJobType({ title, description, location });
+  const haystack = `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
 
   return {
     id: job?.id ? String(job.id) : undefined,
@@ -183,19 +228,22 @@ function normalizeGreenhouseJob(job, boardToken, searchQuery = '') {
         .filter(Boolean)
         .join(' ')
     : '';
-  const haystack = `${title} ${company} ${location} ${metadataText}`.toLowerCase();
+  const description = asCleanString(job?.content || metadataText);
+  const type = inferJobType({ title, description, location });
+  const haystack = `${title} ${company} ${location} ${type} ${metadataText} ${description}`.toLowerCase();
 
   return {
     id: job?.id ? `greenhouse-${job.id}` : undefined,
     title,
     company,
     location,
-    type: 'Role',
+    type,
     fit: buildFitLabel(searchQuery, haystack),
     applyUrl:
       asCleanString(job?.absolute_url || `https://boards.greenhouse.io/${boardToken}/jobs/${job?.id}`) ||
       undefined,
     source: 'Greenhouse',
+    description,
   };
 }
 
@@ -203,8 +251,9 @@ function normalizeLeverJob(job, site, searchQuery = '') {
   const title = asCleanString(job?.text, 'Untitled Role');
   const company = toTitleCase(site.replace(/[-_]+/g, ' ')) || 'Lever Company';
   const location = asCleanString(job?.categories?.location, 'Location not specified');
-  const type = asCleanString(job?.categories?.commitment, 'Role');
   const description = asCleanString(job?.descriptionPlain || job?.description);
+  const rawType = asCleanString(job?.categories?.commitment);
+  const type = rawType || inferJobType({ title, description, location });
   const haystack = `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
 
   return {
@@ -221,40 +270,21 @@ function normalizeLeverJob(job, site, searchQuery = '') {
 }
 
 function buildRecommendedRoles(jobs) {
-  const keywordRules = [
+  const topJobs = jobs.slice(0, 5);
+
+  if (topJobs.length > 0) {
+    return topJobs.map((job) => ({
+      title: job.title,
+      reason: 'This role is being recommended based on the uploaded resume and detected career direction.',
+    }));
+  }
+
+  return [
     {
-      label: 'Software Engineering Intern',
-      reason:
-        'These roles emphasize coding, software development, and technical problem-solving, which align well with a computer science student profile.',
-      keywords: ['software engineer', 'software development', 'backend', 'frontend', 'full stack', 'developer'],
-    },
-    {
-      label: 'Frontend / Full-Stack Intern',
-      reason:
-        'These openings focus on application development and product-facing engineering work, which can be a strong fit for project-based technical experience.',
-      keywords: ['frontend', 'front-end', 'full stack', 'full-stack', 'react', 'web'],
-    },
-    {
-      label: 'Data / Analytics Intern',
-      reason:
-        'These roles may be relevant if the resume includes programming, analytical thinking, and data-oriented coursework or projects.',
-      keywords: ['data', 'analytics', 'machine learning', 'python', 'sql'],
+      title: 'Relevant Internship or Entry-Level Role',
+      reason: 'This role is being recommended based on the uploaded resume and detected career direction.',
     },
   ];
-
-  const matchedRoles = keywordRules.filter((rule) =>
-    jobs.some((job) => {
-      const haystack = `${job.title} ${job.company} ${job.type}`.toLowerCase();
-      return rule.keywords.some((keyword) => haystack.includes(keyword));
-    })
-  );
-
-  return (matchedRoles.length > 0 ? matchedRoles : keywordRules.slice(0, 3))
-    .slice(0, 3)
-    .map((role) => ({
-      title: role.label,
-      reason: role.reason,
-    }));
 }
 
 function normalizeStringList(value, { max = 8 } = {}) {
@@ -267,15 +297,24 @@ function normalizeStringList(value, { max = 8 } = {}) {
   return Array.from(new Set(cleaned)).slice(0, max);
 }
 
-// === AI-term-first, major-agnostic helpers ===
 function normalizeRolePhrase(value = '') {
   return asCleanString(value)
     .toLowerCase()
     .replace(/[()]/g, ' ')
     .replace(/\b(remote|hybrid|virtual|internship|intern|co-op|coop|full-time|full time|part-time|part time|entry-level|entry level)\b/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/[^a-z0-9+#.]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function uniqueNonEmptyStrings(values, max = 10) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => asCleanString(value))
+        .filter(Boolean)
+    )
+  ).slice(0, max);
 }
 
 function buildBaseResumeTermsFromText(resumeText = '') {
@@ -288,9 +327,7 @@ function buildBaseResumeTermsFromText(resumeText = '') {
   const rawMatches = [];
   for (const pattern of candidatePatterns) {
     for (const match of normalized.matchAll(pattern)) {
-      if (match[1]) {
-        rawMatches.push(match[1]);
-      }
+      if (match[1]) rawMatches.push(match[1]);
     }
   }
 
@@ -300,13 +337,15 @@ function buildBaseResumeTermsFromText(resumeText = '') {
       ...(normalized.includes('lab') || normalized.includes('laboratory') ? ['laboratory assistant'] : []),
       ...(normalized.includes('analysis') || normalized.includes('analyst') ? ['analyst'] : []),
       ...(normalized.includes('teaching') || normalized.includes('tutor') ? ['teaching assistant'] : []),
+      ...(normalized.includes('communication') ? ['communications intern'] : []),
+      ...(normalized.includes('marketing') ? ['marketing intern'] : []),
     ],
-    4
+    6
   );
 
   return uniqueNonEmptyStrings(
     [...rawMatches.map((item) => normalizeRolePhrase(item)), ...simpleFallbacks],
-    6
+    8
   ).filter((term) => term.length >= 4);
 }
 
@@ -322,7 +361,7 @@ function buildGenericSearchVariants(baseQuery = '', filter = 'All') {
       : ['remote internship', 'hybrid internship'];
   }
 
-  const variants = uniqueNonEmptyStrings([exact, normalized], 6);
+  const variants = uniqueNonEmptyStrings([exact, normalized], 8);
 
   if (normalized) {
     const words = normalized.split(/\s+/).filter(Boolean);
@@ -337,16 +376,17 @@ function buildGenericSearchVariants(baseQuery = '', filter = 'All') {
     }
   }
 
-  const cleaned = uniqueNonEmptyStrings(variants, 6);
+  const cleaned = uniqueNonEmptyStrings(variants, 8);
 
   if (filter === 'Internship') {
     return uniqueNonEmptyStrings(
       cleaned.flatMap((term) => [
         term.includes('intern') ? term : `${term} intern`,
         term.includes('internship') ? term : `${term} internship`,
+        term.includes('assistant') ? term : `${term} assistant`,
         term,
       ]),
-      6
+      10
     );
   }
 
@@ -355,9 +395,10 @@ function buildGenericSearchVariants(baseQuery = '', filter = 'All') {
       cleaned.flatMap((term) => [
         term.includes('remote') ? term : `remote ${term}`,
         `hybrid ${term}`,
+        `virtual ${term}`,
         term,
       ]),
-      6
+      10
     );
   }
 
@@ -385,9 +426,7 @@ function inferResumeJobProfile(resumeText = '') {
 }
 
 function enrichResumeAnalysis(parsed, resumeText = '') {
-  if (!parsed || parsed.isResume !== true) {
-    return parsed;
-  }
+  if (!parsed || parsed.isResume !== true) return parsed;
 
   const fallbackProfile = inferResumeJobProfile(resumeText);
 
@@ -400,20 +439,8 @@ function enrichResumeAnalysis(parsed, resumeText = '') {
     careerPaths: careerPaths.length > 0 ? careerPaths : fallbackProfile.careerPaths,
     jobKeywords: jobKeywords.length > 0 ? jobKeywords : fallbackProfile.jobKeywords,
     recommendedSearchTerms:
-      recommendedSearchTerms.length > 0
-        ? recommendedSearchTerms
-        : fallbackProfile.recommendedSearchTerms,
+      recommendedSearchTerms.length > 0 ? recommendedSearchTerms : fallbackProfile.recommendedSearchTerms,
   };
-}
-
-function uniqueNonEmptyStrings(values, max = 10) {
-  return Array.from(
-    new Set(
-      values
-        .map((value) => asCleanString(value))
-        .filter(Boolean)
-    )
-  ).slice(0, max);
 }
 
 function buildSearchVariants(baseQuery = '', filter = 'All') {
@@ -430,11 +457,11 @@ function buildRoleRecommendationsFromCareerPaths(careerPaths = []) {
 function buildRecommendedSearchInputs({ searchTerms = [], careerPaths = [], jobKeywords = [] } = {}) {
   const preferredTerms = normalizeStringList(searchTerms, { max: 6 });
   const secondaryTerms = normalizeStringList(careerPaths, { max: 5 });
-  const tertiaryTerms = normalizeStringList(jobKeywords, { max: 6 });
+  const tertiaryTerms = normalizeStringList(jobKeywords, { max: 8 });
 
   const baseTerms = uniqueNonEmptyStrings(
     [...preferredTerms, ...secondaryTerms, ...tertiaryTerms].map((term) => normalizeRolePhrase(term) || asCleanString(term)),
-    6
+    10
   );
 
   if (baseTerms.length === 0) {
@@ -446,13 +473,65 @@ function buildRecommendedSearchInputs({ searchTerms = [], careerPaths = [], jobK
 
   const expandedTerms = uniqueNonEmptyStrings(
     baseTerms.flatMap((term) => buildGenericSearchVariants(term, 'Internship')),
-    8
+    12
   );
 
   return {
     searchTerms: expandedTerms.length > 0 ? expandedTerms : baseTerms,
     primaryQuery: baseTerms[0],
   };
+}
+
+function getJobHaystack(job) {
+  return `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+}
+
+function scoreJob(job, context = {}) {
+  const haystack = getJobHaystack(job);
+  const title = asCleanString(job.title).toLowerCase();
+  const searchTerms = context.searchTerms || [];
+  const careerPaths = context.careerPaths || [];
+  const jobKeywords = context.jobKeywords || [];
+  const allTerms = uniqueNonEmptyStrings([...searchTerms, ...careerPaths, ...jobKeywords], 25)
+    .map((term) => normalizeRolePhrase(term) || asCleanString(term).toLowerCase())
+    .filter(Boolean);
+
+  let score = 0;
+
+  for (const term of allTerms) {
+    if (!term) continue;
+    if (title.includes(term)) score += 12;
+    else if (haystack.includes(term)) score += 6;
+
+    const words = term.split(/\s+/).filter((word) => word.length >= 3);
+    for (const word of words) {
+      if (title.includes(word)) score += 2;
+      else if (haystack.includes(word)) score += 1;
+    }
+  }
+
+  if (isInternshipJob(job)) score += 8;
+  if (job.applyUrl) score += 3;
+  if (job.description) score += 2;
+  if (isRemoteJob(job)) score += 1;
+
+  const seniorNegative = ['senior', 'sr.', 'manager', 'director', 'principal', 'lead ', 'head of', 'chief'];
+  if (seniorNegative.some((word) => title.includes(word))) score -= 20;
+
+  return score;
+}
+
+function rankJobs(jobs, context = {}) {
+  return [...jobs]
+    .map((job) => {
+      const score = scoreJob(job, context);
+      return {
+        ...job,
+        matchScore: score,
+        fit: score >= 24 ? 'High Match' : score >= 12 ? 'Good Match' : job.fit || 'Potential Match',
+      };
+    })
+    .sort((a, b) => b.matchScore - a.matchScore);
 }
 
 async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPerPage = 50 } = {}) {
@@ -491,7 +570,7 @@ async function fetchAdzunaJobsForQueries({
   page = 1,
   resultsPerPage = 50,
 } = {}) {
-  const safeQueries = uniqueNonEmptyStrings(queries, 5);
+  const safeQueries = uniqueNonEmptyStrings(queries, 8);
 
   const settled = await Promise.allSettled(
     safeQueries.map((search) => fetchAdzunaJobs({ search, location, page, resultsPerPage }))
@@ -518,10 +597,9 @@ async function fetchGreenhouseJobs({ search = '', location = '' } = {}) {
   );
 
   return responses.flat().filter((job) => {
-    const haystack = `${job.title} ${job.company} ${job.location} ${job.type}`.toLowerCase();
+    const haystack = getJobHaystack(job);
     const matchesSearch = matchesSearchText(search, haystack);
-    const matchesLocation =
-      !location || job.location.toLowerCase().includes(location.toLowerCase());
+    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
     return matchesSearch && matchesLocation;
   });
 }
@@ -540,10 +618,9 @@ async function fetchLeverJobs({ search = '', location = '' } = {}) {
   );
 
   return responses.flat().filter((job) => {
-    const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+    const haystack = getJobHaystack(job);
     const matchesSearch = matchesSearchText(search, haystack);
-    const matchesLocation =
-      !location || job.location.toLowerCase().includes(location.toLowerCase());
+    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
     return matchesSearch && matchesLocation;
   });
 }
@@ -554,19 +631,28 @@ function mergeAndDedupeJobs(jobLists) {
 
   for (const job of merged) {
     const key = getJobDedupeKey(job);
-
     if (!key || key === '-') continue;
 
-    if (!deduped.has(key)) {
+    const existing = deduped.get(key);
+
+    if (!existing) {
       deduped.set(key, job);
       continue;
     }
 
-    const existing = deduped.get(key);
-    const existingHasApplyUrl = Boolean(existing?.applyUrl);
-    const nextHasApplyUrl = Boolean(job?.applyUrl);
+    const existingScore =
+      (existing.applyUrl ? 3 : 0) +
+      (existing.description ? 2 : 0) +
+      (isRemoteJob(existing) ? 1 : 0) +
+      (isInternshipJob(existing) ? 1 : 0);
 
-    if (!existingHasApplyUrl && nextHasApplyUrl) {
+    const nextScore =
+      (job.applyUrl ? 3 : 0) +
+      (job.description ? 2 : 0) +
+      (isRemoteJob(job) ? 1 : 0) +
+      (isInternshipJob(job) ? 1 : 0);
+
+    if (nextScore > existingScore) {
       deduped.set(key, job);
     }
   }
@@ -576,10 +662,9 @@ function mergeAndDedupeJobs(jobLists) {
 
 function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = {}) {
   return jobs.filter((job) => {
-    const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+    const haystack = getJobHaystack(job);
     const matchesSearch = matchesSearchText(search, haystack);
-    const matchesLocation =
-      !location || job.location.toLowerCase().includes(location.toLowerCase());
+    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
 
     const matchesFilter =
       filter === 'All' ||
@@ -588,6 +673,71 @@ function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = 
 
     return matchesSearch && matchesLocation && matchesFilter;
   });
+}
+
+function removeSeniorLevelJobs(jobs) {
+  return jobs.filter((job) => {
+    const title = asCleanString(job.title).toLowerCase();
+    return !(
+      title.includes('senior') ||
+      title.includes('sr.') ||
+      title.includes('manager') ||
+      title.includes('director') ||
+      title.includes('principal') ||
+      title.includes('lead ') ||
+      title.includes('chief')
+    );
+  });
+}
+
+async function fetchJobPool({ searchTerms = [], careerPaths = [], jobKeywords = [], location = '', filter = 'All', page = 1 } = {}) {
+  const seeds = uniqueNonEmptyStrings([...searchTerms, ...careerPaths, ...jobKeywords], 10);
+  const baseSeeds = seeds.length > 0 ? seeds : ['internship', 'research assistant'];
+
+  const searchQueries = uniqueNonEmptyStrings(
+    baseSeeds.flatMap((term) => buildGenericSearchVariants(term, filter)),
+    12
+  );
+
+  let adzunaRawJobs = await fetchAdzunaJobsForQueries({
+    queries: searchQueries,
+    location,
+    page,
+    resultsPerPage: 35,
+  });
+
+  if (adzunaRawJobs.length < 8 && filter !== 'All') {
+    const relaxedQueries = uniqueNonEmptyStrings(
+      baseSeeds.flatMap((term) => buildGenericSearchVariants(term, 'All')),
+      8
+    );
+
+    const relaxedRawJobs = await fetchAdzunaJobsForQueries({
+      queries: relaxedQueries,
+      location,
+      page,
+      resultsPerPage: 25,
+    });
+
+    adzunaRawJobs = [...adzunaRawJobs, ...relaxedRawJobs];
+  }
+
+  const boardSearch = searchQueries[0] || baseSeeds[0] || 'intern';
+
+  const [greenhouseJobs, leverJobs] = await Promise.all([
+    fetchGreenhouseJobs({ search: boardSearch, location }),
+    fetchLeverJobs({ search: boardSearch, location }),
+  ]);
+
+  const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, boardSearch));
+  const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
+  const rankedJobs = rankJobs(mergedJobs, { searchTerms, careerPaths, jobKeywords });
+
+  return {
+    jobs: rankedJobs,
+    searchQueries,
+    totalFetched: mergedJobs.length,
+  };
 }
 
 app.get('/jobs/recommended', async (req, res) => {
@@ -603,35 +753,18 @@ app.get('/jobs/recommended', async (req, res) => {
     });
 
     const cachedResponse = getCachedValue(cacheKey);
-    if (cachedResponse) {
-      return res.json(cachedResponse);
-    }
+    if (cachedResponse) return res.json(cachedResponse);
 
     const rawSearchTerms = searchTermsParam
-      ? searchTermsParam
-          .split(',')
-          .map((term) => term.trim())
-          .filter(Boolean)
+      ? searchTermsParam.split(',').map((term) => term.trim()).filter(Boolean)
       : [];
 
     const careerPaths = careerPathsParam
-      ? uniqueNonEmptyStrings(
-          careerPathsParam
-            .split(',')
-            .map((term) => term.trim())
-            .filter(Boolean),
-          5
-        )
+      ? uniqueNonEmptyStrings(careerPathsParam.split(',').map((term) => term.trim()).filter(Boolean), 5)
       : [];
 
     const jobKeywords = jobKeywordsParam
-      ? uniqueNonEmptyStrings(
-          jobKeywordsParam
-            .split(',')
-            .map((term) => term.trim())
-            .filter(Boolean),
-          8
-        )
+      ? uniqueNonEmptyStrings(jobKeywordsParam.split(',').map((term) => term.trim()).filter(Boolean), 8)
       : [];
 
     const { searchTerms, primaryQuery } = buildRecommendedSearchInputs({
@@ -640,43 +773,32 @@ app.get('/jobs/recommended', async (req, res) => {
       jobKeywords,
     });
 
-    const adzunaRawJobs = await fetchAdzunaJobsForQueries({
-      queries: searchTerms.slice(0, 4),
-      resultsPerPage: 20,
+    const pool = await fetchJobPool({
+      searchTerms,
+      careerPaths,
+      jobKeywords,
+      filter: 'All',
+      page: 1,
     });
 
-    const [greenhouseResult, leverResult] = await Promise.allSettled([
-      fetchGreenhouseJobs({ search: primaryQuery || 'intern' }),
-      fetchLeverJobs({ search: primaryQuery || 'intern' }),
-    ]);
+    const noSeniorJobs = removeSeniorLevelJobs(pool.jobs).filter((job) => job.applyUrl);
+    const internshipJobs = noSeniorJobs.filter(isInternshipJob);
 
-    const greenhouseJobs = greenhouseResult.status === 'fulfilled' ? greenhouseResult.value : [];
-    const leverJobs = leverResult.status === 'fulfilled' ? leverResult.value : [];
-
-    const adzunaJobs = adzunaRawJobs.map((job) =>
-      normalizeAdzunaJob(job, primaryQuery || 'intern')
-    );
-
-    const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
-
-    const recommendedJobs = applyJobFilters(mergedJobs, {
-      filter: 'Internship',
-    })
-      .filter((job) => job.applyUrl)
+    const recommendedJobs = (internshipJobs.length >= 6 ? internshipJobs : noSeniorJobs)
       .slice(0, 30);
 
     const roles =
       careerPaths.length > 0
         ? buildRoleRecommendationsFromCareerPaths(careerPaths)
-        : recommendedJobs.length > 0
-        ? buildRecommendedRoles(recommendedJobs)
-        : buildRoleRecommendationsFromCareerPaths(rawSearchTerms);
+        : buildRecommendedRoles(recommendedJobs);
 
     const responsePayload = {
       roles,
       jobs: recommendedJobs,
       searchTerms,
       primaryQuery,
+      totalFetched: pool.totalFetched,
+      searchQueries: pool.searchQueries,
     };
 
     setCachedValue(cacheKey, responsePayload);
@@ -707,90 +829,60 @@ app.get('/jobs/search', async (req, res) => {
     });
 
     const cachedResponse = getCachedValue(cacheKey);
-    if (cachedResponse) {
-      return res.json(cachedResponse);
-    }
+    if (cachedResponse) return res.json(cachedResponse);
 
     const requestedSearchTerms = searchTermsParam
-      ? uniqueNonEmptyStrings(
-          searchTermsParam
-            .split(',')
-            .map((term) => term.trim())
-            .filter(Boolean),
-          5
-        )
+      ? uniqueNonEmptyStrings(searchTermsParam.split(',').map((term) => term.trim()).filter(Boolean), 8)
       : [];
 
-    const baseSeedTerms =
-      requestedSearchTerms.length > 0
-        ? requestedSearchTerms.slice(0, 4)
-        : query
-        ? [query]
-        : ['internship'];
+    const baseSeedTerms = requestedSearchTerms.length > 0 ? requestedSearchTerms : query ? [query] : ['internship'];
 
-    const searchQueries = uniqueNonEmptyStrings(
-      baseSeedTerms.flatMap((term) => buildGenericSearchVariants(term, filter)),
-      6
-    );
-
-    let adzunaRawJobs = await fetchAdzunaJobsForQueries({
-      queries: searchQueries,
+    const pool = await fetchJobPool({
+      searchTerms: query ? [query, ...baseSeedTerms] : baseSeedTerms,
       location,
+      filter,
       page,
-      resultsPerPage: 25,
     });
 
-    if (adzunaRawJobs.length === 0 && filter !== 'All') {
-      const relaxedQueries = uniqueNonEmptyStrings(
-        baseSeedTerms.flatMap((term) => buildGenericSearchVariants(term, 'All')),
-        4
-      );
+    const relaxedSearch = query || '';
 
-      adzunaRawJobs = await fetchAdzunaJobsForQueries({
-        queries: relaxedQueries,
-        location,
-        page,
-        resultsPerPage: 15,
-      });
-    }
-
-    const boardSearch = query || searchQueries[0] || requestedSearchTerms[0] || 'intern';
-
-    const [greenhouseJobs, leverJobs] = await Promise.all([
-      fetchGreenhouseJobs({ search: boardSearch, location }),
-      fetchLeverJobs({ search: boardSearch, location }),
-    ]);
-
-    const adzunaJobs = adzunaRawJobs.map((job) =>
-      normalizeAdzunaJob(job, boardSearch)
-    );
-
-    const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
-
-    const relaxedSearch = query || requestedSearchTerms[0] || searchQueries[0] || '';
-
-    let jobs = applyJobFilters(mergedJobs, {
+    let jobs = applyJobFilters(pool.jobs, {
       search: relaxedSearch,
       location,
       filter,
     });
 
     if (jobs.length === 0 && filter !== 'All') {
-      jobs = applyJobFilters(mergedJobs, {
+      jobs = applyJobFilters(pool.jobs, {
         search: '',
         location,
         filter,
       });
     }
 
-    jobs = jobs.slice(0, 50);
+    if (filter === 'Remote' && jobs.length === 0) {
+      const remotePool = await fetchJobPool({
+        searchTerms: baseSeedTerms.flatMap((term) => [`remote ${term}`, `hybrid ${term}`, `virtual ${term}`]),
+        location,
+        filter: 'Remote',
+        page,
+      });
+
+      jobs = applyJobFilters(remotePool.jobs, {
+        search: '',
+        location,
+        filter: 'Remote',
+      });
+    }
+
+    jobs = mergeAndDedupeJobs([jobs]).slice(0, 50);
 
     const responsePayload = {
       jobs,
       page,
       filter,
-      searchQueries,
-      totalFetched: mergedJobs.length,
+      searchQueries: pool.searchQueries,
+      totalFetched: pool.totalFetched,
     };
 
     setCachedValue(cacheKey, responsePayload);
@@ -866,18 +958,10 @@ If the uploaded document IS a resume, you MUST return ONLY valid JSON in exactly
     "languageAndProfessionalism": number,
     "careerAlignmentImpact": number
   },
-  "overallImpression": {
-    "intro": "string"
-  },
-  "contentAndRelevance": {
-    "intro": "string"
-  },
-  "formattingAndVisualAppeal": {
-    "intro": "string"
-  },
-  "languageAndProfessionalism": {
-    "intro": "string"
-  },
+  "overallImpression": { "intro": "string" },
+  "contentAndRelevance": { "intro": "string" },
+  "formattingAndVisualAppeal": { "intro": "string" },
+  "languageAndProfessionalism": { "intro": "string" },
   "recommendations": ["string", "string", "string"],
   "additionalNotes": "string",
   "careerPaths": ["string", "string", "string"],
@@ -907,6 +991,7 @@ VERY IMPORTANT RULES:
 - Do not use markdown or code fences
 - Do not include any explanation outside the JSON
 - Be strict in deciding whether it is a resume
+
 WRITING STYLE RULES:
 - Write like a real university career peer advisor giving resume feedback to a student.
 - Each major feedback section should be ONE polished paragraph, not bullet points and not a list of separate issue/fix statements.
@@ -918,24 +1003,6 @@ WRITING STYLE RULES:
 - Be specific to the actual resume content.
 - Do not invent experience, awards, projects, companies, coursework, or technical skills not visible in the resume text.
 - Do not mention that you are an AI.
-
-STYLE EXAMPLE TO FOLLOW:
-Overall Impression:
-Your resume has a solid structure and is easy to follow. It clearly reflects strong academic achievement and dedication, particularly through your consistent academic performance and honors distinctions. With further refinement to the structure and organization, the resume can become even stronger and more strategically aligned with your long-term career goal.
-
-Content and Relevance:
-Your resume reflects a strong academic background, which is highly important and well aligned with your long-term goal. I recommend adding relevant coursework under your Education section to better represent your academic progress and showcase advanced or field-specific classes you complete. You may also consider removing older or less relevant experiences to free up space for more recent achievements and college-level experiences. While your prior work experience demonstrates strong responsibility and transferable skills, I recommend quantifying your bullet points wherever possible. Adding measurable details will make your accomplishments more precise and impactful.
-
-Formatting and Visual Appeal:
-Your resume has a solid structure and layout. However, I have a few recommendations to strengthen its presentation. I recommend keeping all dates consistently aligned to the right throughout the resume to improve visual balance and readability. You may also consider placing your most relevant sections closer to the top to better emphasize your strongest qualifications. Additionally, simplifying lengthy lines and removing unnecessary details can reduce clutter and make the resume easier to skim.
-
-Language and Professionalism:
-Your bullet points effectively communicate your responsibilities and demonstrate a strong work ethic. However, I recommend strengthening them by using a more structured approach: begin with a strong action verb, clearly state the task performed, highlight the transferable skill applied, and conclude with a measurable outcome when possible. This will make your experiences more precise and impactful.
-
-Recommendations:
-1. Seek opportunities or experiences that directly align with the student's long-term career goal.
-2. Refine the Education or Skills section so the most relevant academic and technical strengths are easier to identify.
-3. Incorporate measurable outcomes and field-specific details throughout the resume where applicable.
 
 SECTION GUIDELINES:
 
@@ -950,42 +1017,6 @@ The feedback must be organized around these exact student-facing sections:
 For each of these four section objects — overallImpression, contentAndRelevance, formattingAndVisualAppeal, and languageAndProfessionalism — use only the "intro" field.
 The "intro" field must contain the full paragraph for that section.
 Do not split the section into issue/fix/recruiter/outcome fields.
-
-Overall Impression:
-- Guiding question: How does the resume look at first glance? Is it balanced and professional?
-- Write one polished paragraph of 3 to 5 sentences.
-- Start positive, then mention the main structural or strategic improvement.
-- Focus on first-glance professionalism, balance, organization, and whether the resume feels ready for internships, jobs, or academic opportunities.
-
-Content and Relevance:
-- Guiding question: Do the experiences and skills align with the student's career goals? Are accomplishments quantified when possible?
-- Write one polished paragraph of 4 to 7 sentences.
-- Discuss alignment with the student's likely career direction, relevant coursework, projects, work experience, leadership, skills, and quantification.
-- Mention missing or underdeveloped sections if applicable.
-- Recommend specific additions or removals based on the resume.
-
-Formatting and Visual Appeal:
-- Guiding question: Is the format consistent? Is it easy to skim? Are the sections well-organized?
-- Write one polished paragraph of 3 to 6 sentences.
-- Discuss spacing, alignment, margins, section order, date placement, ATS-friendliness, contact information, and readability when relevant.
-- Make the feedback practical and student-friendly.
-
-Language and Professionalism:
-- Guiding question: Are strong action verbs used? Is the language industry appropriate? Are there unnecessary fillers?
-- Write one polished paragraph of 3 to 5 sentences.
-- Discuss action verbs, bullet structure, clarity, specificity, professional tone, and measurable outcomes.
-- Encourage the structure: action verb + task performed + transferable skill or tool used + measurable outcome when possible.
-
-Recommendations:
-- Provide exactly 3 strings.
-- Each recommendation should be a complete sentence or two, not a short fragment.
-- The recommendations should be the highest-impact next steps for the student.
-- Do not repeat the exact same advice from the paragraphs word-for-word, but it can reinforce the main themes.
-
-Additional Notes:
-- Only include meaningful additional notes.
-- If there are no major additional notes, return an empty string for additionalNotes.
-- Do not force unnecessary comments.
 
 Career Paths:
 - Provide 3 to 5 likely internship, early-career, academic, or professional paths based on the actual resume.
