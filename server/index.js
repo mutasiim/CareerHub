@@ -66,9 +66,8 @@ function normalizeForSearch(value = '') {
 function getJobDedupeKey(job) {
   const company = normalizeForDedupe(job?.company || '');
   const title = normalizeForDedupe(job?.title || '');
-  const location = normalizeForDedupe(job?.location || '');
 
-  return `${company}-${title}-${location}`;
+  return `${company}-${title}`;
 }
 
 function getCacheKey(namespace, payload = {}) {
@@ -162,23 +161,34 @@ function isInternshipJob(job) {
 }
 
 function isRemoteJob(job) {
-  const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+  const title = asCleanString(job?.title).toLowerCase();
+  const location = asCleanString(job?.location).toLowerCase();
+  const type = asCleanString(job?.type).toLowerCase();
+  const description = asCleanString(job?.description).toLowerCase();
 
-  const remoteKeywords = [
-    'remote',
-    'work from home',
-    'wfh',
-    'hybrid',
-    'distributed',
-    'anywhere',
-    'virtual',
-    'telework',
-    'telecommute',
-    'remote eligible',
-    'flexible location',
-  ];
+  const strongText = `${title} ${location} ${type}`;
+  const fullText = `${strongText} ${description}`;
 
-  return remoteKeywords.some((keyword) => haystack.includes(keyword));
+  if (
+    strongText.includes('remote') ||
+    strongText.includes('work from home') ||
+    strongText.includes('wfh') ||
+    strongText.includes('virtual') ||
+    strongText.includes('telework') ||
+    strongText.includes('telecommute') ||
+    strongText.includes('anywhere') ||
+    strongText.includes('hybrid')
+  ) {
+    return true;
+  }
+
+  return (
+    fullText.includes('fully remote') ||
+    fullText.includes('100% remote') ||
+    fullText.includes('remote position') ||
+    fullText.includes('remote role') ||
+    fullText.includes('remote opportunity')
+  );
 }
 
 function inferJobType({ title = '', type = '', description = '', location = '' } = {}) {
@@ -784,7 +794,20 @@ app.get('/jobs/recommended', async (req, res) => {
     const noSeniorJobs = removeSeniorLevelJobs(pool.jobs).filter((job) => job.applyUrl);
     const internshipJobs = noSeniorJobs.filter(isInternshipJob);
 
-    const recommendedJobs = (internshipJobs.length >= 6 ? internshipJobs : noSeniorJobs)
+    const recommendedSource = internshipJobs.length >= 6 ? internshipJobs : noSeniorJobs;
+
+    const seenRecommendedCompanies = new Map();
+
+    const recommendedJobs = recommendedSource
+      .filter((job) => {
+        const company = normalizeForDedupe(job.company || 'unknown');
+        const count = seenRecommendedCompanies.get(company) || 0;
+
+        if (count >= 2) return false;
+
+        seenRecommendedCompanies.set(company, count + 1);
+        return true;
+      })
       .slice(0, 30);
 
     const roles =
@@ -860,18 +883,26 @@ app.get('/jobs/search', async (req, res) => {
       });
     }
 
-    if (filter === 'Remote' && jobs.length === 0) {
+    if (filter === 'Remote' && jobs.length < 6) {
       const remotePool = await fetchJobPool({
-        searchTerms: baseSeedTerms.flatMap((term) => [`remote ${term}`, `hybrid ${term}`, `virtual ${term}`]),
+        searchTerms: baseSeedTerms.flatMap((term) => [
+          `remote ${term}`,
+          `virtual ${term}`,
+          `work from home ${term}`,
+        ]),
         location,
-        filter: 'Remote',
+        filter: 'All',
         page,
       });
 
-      jobs = applyJobFilters(remotePool.jobs, {
+      const additionalRemoteJobs = applyJobFilters(remotePool.jobs, {
         search: '',
         location,
         filter: 'Remote',
+      });
+
+      jobs = rankJobs(mergeAndDedupeJobs([jobs, additionalRemoteJobs]), {
+        searchTerms: baseSeedTerms,
       });
     }
 
