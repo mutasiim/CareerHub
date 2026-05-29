@@ -1050,6 +1050,33 @@ SCORING RUBRIC:
 - Language and Professionalism: score out of 20
 - Career Alignment / Impact: score out of 15
 
+STRICT SCORING PHILOSOPHY:
+- Score like a real university career services reviewer, not like a generous chatbot.
+- Do NOT give high scores just because the document has basic resume sections.
+- A resume with only short sections, limited detail, generic bullets, weak structure, missing dates, missing locations, or limited measurable impact should usually score between 50 and 70.
+- A resume should only score 80 or higher if it is genuinely strong, well-formatted, specific, detailed, easy to skim, and includes strong bullet points with clear impact.
+- A resume should only score 90 or higher if it is polished, competitive, highly targeted, consistently formatted, quantified, and close to submission-ready.
+- If the resume is short, thin, generic, or looks like a quick sample resume, it should NOT score above 75.
+- If sections run together, headings are unclear, formatting is weak, or the resume is hard to skim, strongly penalize Formatting and Visual Appeal.
+- If experience bullets are generic responsibilities without enough measurable outcomes, strongly penalize Content and Relevance and Language and Professionalism.
+- If the resume has only one or two experiences and little project/detail depth, strongly penalize Content and Relevance.
+- If the career direction is understandable but not strongly supported with targeted experience, coursework, projects, or skills, penalize Career Alignment / Impact.
+
+SCORE BAND GUIDANCE:
+- 90 to 100: Excellent, polished, highly competitive, targeted, quantified, and nearly ready to submit.
+- 80 to 89: Strong resume with solid structure, relevant experience, good detail, and only moderate improvements needed.
+- 70 to 79: Decent resume, but still has noticeable issues such as limited detail, weak bullets, inconsistent formatting, or underdeveloped sections.
+- 60 to 69: Basic or thin resume with some relevant content but significant improvement needed before it feels competitive.
+- 50 to 59: Weak resume with limited structure, vague content, missing details, or poor formatting.
+- Below 50: Very weak, incomplete, unclear, or barely resume-like.
+
+CATEGORY-SPECIFIC SCORING RULES:
+- Overall Impression out of 15: Give 13 to 15 only if the resume immediately looks professional, organized, complete, and targeted. Give 8 to 12 for basic but underdeveloped resumes. Give below 8 if it looks incomplete, messy, or hard to review.
+- Content and Relevance out of 30: Give 25 to 30 only if experiences, projects, skills, and coursework strongly support the target field with specific achievements. Give 17 to 24 if relevant content exists but lacks depth or measurable impact. Give below 17 if content is thin, generic, or weakly connected to the target field.
+- Formatting and Visual Appeal out of 20: Give 17 to 20 only if headings, spacing, alignment, dates, locations, and section organization are clean and easy to skim. Give 11 to 16 for basic formatting with noticeable issues. Give below 11 if the resume lacks clear structure or sections run together.
+- Language and Professionalism out of 20: Give 17 to 20 only if bullet points consistently use strong action verbs, clear tasks, tools/skills, and outcomes. Give 11 to 16 if language is understandable but generic. Give below 11 if bullets are vague, repetitive, or poorly written.
+- Career Alignment / Impact out of 15: Give 13 to 15 only if the resume clearly supports a specific career direction. Give 8 to 12 if the direction is visible but not strongly developed. Give below 8 if the career direction is unclear or weakly supported.
+
 RESUME TIER RULES:
 - Gold = 85 to 100
 - Silver = 70 to 84
@@ -1059,7 +1086,8 @@ RESUME TIER RULES:
 VERY IMPORTANT RULES:
 - The total score must equal the sum of the 5 category scores
 - Total score must be out of 100
-- Use realistic scoring, not inflated scoring
+- Use strict, realistic scoring, not inflated scoring
+- If the resume feels like a quick sample, short test document, or underdeveloped draft, score it lower even if the content is relevant
 - If the file is not a resume, do NOT provide resume feedback sections
 - If the file is not a resume, return only the isResume:false JSON
 - Do not use markdown or code fences
