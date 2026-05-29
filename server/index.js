@@ -138,26 +138,56 @@ function matchesSearchText(search = '', haystack = '') {
 }
 
 function isInternshipJob(job) {
-  const haystack = `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+  const title = asCleanString(job?.title).toLowerCase();
+  const type = asCleanString(job?.type).toLowerCase();
 
-  const internshipKeywords = [
+  const blockedTitleKeywords = [
+    'professor',
+    'faculty',
+    'lecturer',
+    'instructor',
+    'tenure',
+    'surgeon',
+    'physician',
+    'physical therapist',
+    'therapist',
+    'vp',
+    'vice president',
+    'director',
+    'manager',
+    'senior',
+    'sr.',
+    'sr ',
+    'principal',
+    'lead ',
+    'chief',
+    'head of',
+  ];
+
+  if (blockedTitleKeywords.some((keyword) => title.includes(keyword))) {
+    return false;
+  }
+
+  const titleInternshipKeywords = [
     'intern',
     'internship',
-    'summer intern',
-    'fall intern',
-    'spring intern',
     'co-op',
     'coop',
     'co op',
-    'student',
+    'student worker',
+    'student assistant',
     'student trainee',
     'work study',
     'work-study',
-    'research assistant',
-    'lab assistant',
+    'trainee',
+    'fellowship',
   ];
 
-  return internshipKeywords.some((keyword) => haystack.includes(keyword));
+  if (titleInternshipKeywords.some((keyword) => title.includes(keyword))) {
+    return true;
+  }
+
+  return type === 'internship';
 }
 
 function isRemoteJob(job) {
@@ -404,11 +434,18 @@ function buildGenericSearchVariants(baseQuery = '', filter = 'All') {
     return uniqueNonEmptyStrings(
       cleaned.flatMap((term) => [
         term.includes('remote') ? term : `remote ${term}`,
-        `hybrid ${term}`,
+        `${term} remote`,
         `virtual ${term}`,
+        `${term} virtual`,
+        `work from home ${term}`,
+        `${term} work from home`,
+        `remote intern ${term}`,
+        `remote internship ${term}`,
+        `remote assistant ${term}`,
+        `hybrid ${term}`,
         term,
       ]),
-      10
+      12
     );
   }
 
@@ -883,12 +920,18 @@ app.get('/jobs/search', async (req, res) => {
       });
     }
 
-    if (filter === 'Remote' && jobs.length < 6) {
+    if (filter === 'Remote' && jobs.length < 8) {
       const remotePool = await fetchJobPool({
         searchTerms: baseSeedTerms.flatMap((term) => [
           `remote ${term}`,
+          `${term} remote`,
           `virtual ${term}`,
+          `${term} virtual`,
           `work from home ${term}`,
+          `${term} work from home`,
+          `remote intern ${term}`,
+          `remote internship ${term}`,
+          `remote assistant ${term}`,
         ]),
         location,
         filter: 'All',
