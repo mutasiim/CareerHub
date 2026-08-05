@@ -253,6 +253,7 @@ function normalizeAdzunaJob(job, searchQuery = '') {
     type,
     fit: buildFitLabel(searchQuery, haystack),
     applyUrl: asCleanString(job?.redirect_url || job?.adref) || undefined,
+    createdAt: asCleanString(job?.created) || undefined,
     source: 'Adzuna',
     description,
   };
@@ -581,7 +582,13 @@ function rankJobs(jobs, context = {}) {
     .sort((a, b) => b.matchScore - a.matchScore);
 }
 
-async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPerPage = 50 } = {}) {
+async function fetchAdzunaJobs({
+  search = '',
+  location = '',
+  radiusKm,
+  page = 1,
+  resultsPerPage = 50,
+} = {}) {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
 
@@ -598,6 +605,7 @@ async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPe
 
   if (search) params.append('what', search);
   if (location) params.append('where', location);
+  if (location && Number.isFinite(radiusKm)) params.append('distance', String(radiusKm));
 
   const response = await fetch(
     `${ADZUNA_API_URL}/jobs/${ADZUNA_COUNTRY}/search/${page}?${params.toString()}`
@@ -614,13 +622,16 @@ async function fetchAdzunaJobs({ search = '', location = '', page = 1, resultsPe
 async function fetchAdzunaJobsForQueries({
   queries = [],
   location = '',
+  radiusKm,
   page = 1,
   resultsPerPage = 50,
 } = {}) {
   const safeQueries = uniqueNonEmptyStrings(queries, 8);
 
   const settled = await Promise.allSettled(
-    safeQueries.map((search) => fetchAdzunaJobs({ search, location, page, resultsPerPage }))
+    safeQueries.map((search) =>
+      fetchAdzunaJobs({ search, location, radiusKm, page, resultsPerPage })
+    )
   );
 
   return settled
@@ -737,7 +748,15 @@ function removeSeniorLevelJobs(jobs) {
   });
 }
 
-async function fetchJobPool({ searchTerms = [], careerPaths = [], jobKeywords = [], location = '', filter = 'All', page = 1 } = {}) {
+async function fetchJobPool({
+  searchTerms = [],
+  careerPaths = [],
+  jobKeywords = [],
+  location = '',
+  radiusKm,
+  filter = 'All',
+  page = 1,
+} = {}) {
   const seeds = uniqueNonEmptyStrings([...searchTerms, ...careerPaths, ...jobKeywords], 10);
   const baseSeeds = seeds.length > 0 ? seeds : ['internship', 'research assistant'];
 
@@ -749,6 +768,7 @@ async function fetchJobPool({ searchTerms = [], careerPaths = [], jobKeywords = 
   let adzunaRawJobs = await fetchAdzunaJobsForQueries({
     queries: searchQueries,
     location,
+    radiusKm,
     page,
     resultsPerPage: 35,
   });
@@ -762,6 +782,7 @@ async function fetchJobPool({ searchTerms = [], careerPaths = [], jobKeywords = 
     const relaxedRawJobs = await fetchAdzunaJobsForQueries({
       queries: relaxedQueries,
       location,
+      radiusKm,
       page,
       resultsPerPage: 25,
     });
@@ -876,6 +897,11 @@ app.get('/jobs/search', async (req, res) => {
   try {
     const query = asCleanString(req.query.query);
     const location = asCleanString(req.query.location);
+    const requestedRadiusMiles = Number.parseInt(asCleanString(req.query.radiusMiles, '25'), 10);
+    const radiusMiles = [10, 25, 50, 100].includes(requestedRadiusMiles)
+      ? requestedRadiusMiles
+      : 25;
+    const radiusKm = Math.round(radiusMiles * 1.60934);
     const filter = asCleanString(req.query.filter, 'All');
     const page = Number.parseInt(asCleanString(req.query.page, '1'), 10) || 1;
     const searchTermsParam = asCleanString(req.query.searchTerms);
@@ -883,6 +909,7 @@ app.get('/jobs/search', async (req, res) => {
     const cacheKey = getCacheKey('search', {
       query: query.toLowerCase(),
       location: location.toLowerCase(),
+      radiusMiles: location ? radiusMiles : null,
       filter,
       page,
       searchTerms: searchTermsParam.toLowerCase(),
@@ -900,6 +927,7 @@ app.get('/jobs/search', async (req, res) => {
     const pool = await fetchJobPool({
       searchTerms: query ? [query, ...baseSeedTerms] : baseSeedTerms,
       location,
+      radiusKm: location ? radiusKm : undefined,
       filter,
       page,
     });
@@ -908,14 +936,14 @@ app.get('/jobs/search', async (req, res) => {
 
     let jobs = applyJobFilters(pool.jobs, {
       search: relaxedSearch,
-      location,
+      location: '',
       filter,
     });
 
     if (jobs.length === 0 && filter !== 'All') {
       jobs = applyJobFilters(pool.jobs, {
         search: '',
-        location,
+        location: '',
         filter,
       });
     }
@@ -934,13 +962,14 @@ app.get('/jobs/search', async (req, res) => {
           `remote assistant ${term}`,
         ]),
         location,
+        radiusKm: location ? radiusKm : undefined,
         filter: 'All',
         page,
       });
 
       const additionalRemoteJobs = applyJobFilters(remotePool.jobs, {
         search: '',
-        location,
+        location: '',
         filter: 'Remote',
       });
 
@@ -955,6 +984,7 @@ app.get('/jobs/search', async (req, res) => {
       jobs,
       page,
       filter,
+      radiusMiles: location ? radiusMiles : null,
       searchQueries: pool.searchQueries,
       totalFetched: pool.totalFetched,
     };

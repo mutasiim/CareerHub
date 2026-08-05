@@ -1,4 +1,5 @@
 import { useResume } from '@/context/ResumeContext';
+import { useSavedJobs } from '@/context/SavedJobsContext';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useNavigation } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -19,6 +20,9 @@ import {
 const API_URL = 'https://careerhub-backend-xbe9.onrender.com';
 const BROWSE_PAGE_SIZE = 8;
 
+type SortOption = 'Relevance' | 'Newest' | 'Company';
+type RadiusMiles = 10 | 25 | 50 | 100;
+
 type RecommendedRole = {
   title: string;
   reason: string;
@@ -32,6 +36,7 @@ type JobOpening = {
   type: string;
   fit?: string;
   applyUrl?: string;
+  createdAt?: string;
 };
 
 function asString(value: unknown, fallback = ''): string {
@@ -60,6 +65,7 @@ function normalizeJob(job: any): JobOpening {
       asString(
         job?.applyUrl || job?.apply_url || job?.url || job?.jobUrl || job?.job_url
       ) || undefined,
+    createdAt: asString(job?.createdAt || job?.created_at || job?.created) || undefined,
   };
 }
 
@@ -189,15 +195,17 @@ async function fetchJsonWithRetry(url: string, retries = 2): Promise<any> {
 export default function JobsScreen() {
   const navigation = useNavigation();
   const { feedback, resumeRefreshKey } = useResume();
-  const [activeTab, setActiveTab] = useState<'recommended' | 'browse'>('recommended');
+  const { savedJobs, hydrated: savedJobsHydrated, isJobSaved, toggleSavedJob } = useSavedJobs();
+  const [activeTab, setActiveTab] = useState<'recommended' | 'browse' | 'saved'>('recommended');
   const [searchText, setSearchText] = useState('');
   const [locationText, setLocationText] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<'All' | 'Internship' | 'Remote'>('All');
+  const [sortOption, setSortOption] = useState<SortOption>('Relevance');
+  const [radiusMiles, setRadiusMiles] = useState<RadiusMiles>(25);
   const [browsePage, setBrowsePage] = useState(1);
 
   const [recommendedRoleData, setRecommendedRoleData] = useState<RecommendedRole[]>([]);
   const [recommendedJobData, setRecommendedJobData] = useState<JobOpening[]>([]);
-  const [recommendedSuggestedJobs, setRecommendedSuggestedJobs] = useState<JobOpening[]>([]);
   const [browseJobData, setBrowseJobData] = useState<JobOpening[]>([]);
   const [recommendedLoading, setRecommendedLoading] = useState(false);
   const [browseLoading, setBrowseLoading] = useState(false);
@@ -307,6 +315,7 @@ export default function JobsScreen() {
       page,
       search: trimmedSearch.toLowerCase(),
       location: trimmedLocation.toLowerCase(),
+      radiusMiles: trimmedLocation ? radiusMiles : null,
       filter: selectedFilter,
       queries: relevantResumeQueries.map((term) => term.toLowerCase()),
     });
@@ -336,6 +345,7 @@ export default function JobsScreen() {
 
     if (trimmedLocation) {
       params.append('location', trimmedLocation);
+      params.append('radiusMiles', String(radiusMiles));
     }
 
     params.append('filter', selectedFilter);
@@ -376,13 +386,14 @@ export default function JobsScreen() {
     setActiveTab('recommended');
     setRecommendedRoleData([]);
     setRecommendedJobData([]);
-    setRecommendedSuggestedJobs([]);
     setBrowseJobData([]);
     setRecommendedError(null);
     setBrowseError(null);
     setSearchText('');
     setLocationText('');
     setSelectedFilter('All');
+    setSortOption('Relevance');
+    setRadiusMiles(25);
     setBrowsePage(1);
   }, [resumeRefreshKey]);
 
@@ -392,7 +403,6 @@ export default function JobsScreen() {
     const loadRecommendedJobs = async () => {
       try {
         setRecommendedLoading(true);
-        setRecommendedSuggestedJobs([]);
         setRecommendedError(null);
 
         const params = new URLSearchParams();
@@ -490,6 +500,7 @@ export default function JobsScreen() {
   }, [
     searchText,
     locationText,
+    radiusMiles,
     selectedFilter,
     resumeDrivenQueries,
     strongResumeQueries,
@@ -530,7 +541,7 @@ export default function JobsScreen() {
       const jobLocation = job.location.toLowerCase();
 
       const matchesSearch = !normalizedSearch || haystack.includes(normalizedSearch);
-      const matchesLocation = !normalizedLocation || jobLocation.includes(normalizedLocation);
+      const matchesLocation = !normalizedLocation || Boolean(jobLocation);
 
       const isInternship = isLikelyInternshipJob(job);
       const isRemote = isLikelyRemoteJob(job);
@@ -548,12 +559,30 @@ export default function JobsScreen() {
     });
   }, [browseJobData, searchText, locationText, selectedFilter, strongResumeQueries, resumeDrivenQueries]);
 
-  const maxBrowsePages = Math.max(1, Math.ceil(filteredBrowseJobs.length / BROWSE_PAGE_SIZE));
+  const sortedBrowseJobs = useMemo(() => {
+    if (sortOption === 'Newest') {
+      return [...filteredBrowseJobs].sort((a, b) => {
+        const aTime = a.createdAt ? Date.parse(a.createdAt) : 0;
+        const bTime = b.createdAt ? Date.parse(b.createdAt) : 0;
+        return bTime - aTime;
+      });
+    }
+
+    if (sortOption === 'Company') {
+      return [...filteredBrowseJobs].sort(
+        (a, b) => a.company.localeCompare(b.company) || a.title.localeCompare(b.title)
+      );
+    }
+
+    return filteredBrowseJobs;
+  }, [filteredBrowseJobs, sortOption]);
+
+  const maxBrowsePages = Math.max(1, Math.ceil(sortedBrowseJobs.length / BROWSE_PAGE_SIZE));
 
   const paginatedBrowseJobs = useMemo(() => {
     const startIndex = (browsePage - 1) * BROWSE_PAGE_SIZE;
-    return filteredBrowseJobs.slice(startIndex, startIndex + BROWSE_PAGE_SIZE);
-  }, [filteredBrowseJobs, browsePage]);
+    return sortedBrowseJobs.slice(startIndex, startIndex + BROWSE_PAGE_SIZE);
+  }, [sortedBrowseJobs, browsePage]);
 
   const handleViewJob = async (job: JobOpening) => {
     if (!job.applyUrl) {
@@ -618,6 +647,15 @@ export default function JobsScreen() {
         >
           <Text style={[styles.segmentText, activeTab === 'browse' && styles.segmentTextActive]}>
             Browse
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => setActiveTab('saved')}
+          style={[styles.segmentButton, activeTab === 'saved' && styles.segmentButtonActive]}
+        >
+          <Text style={[styles.segmentText, activeTab === 'saved' && styles.segmentTextActive]}>
+            Saved
           </Text>
         </Pressable>
       </View>
@@ -691,8 +729,23 @@ export default function JobsScreen() {
                     </Text>
                   </View>
 
-                  <View style={styles.matchBadge}>
-                    <Text style={styles.matchBadgeText}>{job.fit || 'Recommended'}</Text>
+                  <View style={styles.jobTopActions}>
+                    <View style={styles.matchBadge}>
+                      <Text style={styles.matchBadgeText}>{job.fit || 'Recommended'}</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.saveButton, isJobSaved(job) && styles.saveButtonActive]}
+                      onPress={() => toggleSavedJob(job)}
+                      accessibilityRole="button"
+                      accessibilityLabel={isJobSaved(job) ? 'Remove saved job' : 'Save job'}
+                      hitSlop={8}
+                    >
+                      <Ionicons
+                        name={isJobSaved(job) ? 'bookmark' : 'bookmark-outline'}
+                        size={18}
+                        color={isJobSaved(job) ? '#ffffff' : '#93c5fd'}
+                      />
+                    </TouchableOpacity>
                   </View>
                 </View>
 
@@ -709,7 +762,7 @@ export default function JobsScreen() {
             ))}
           </View>
         </>
-      ) : (
+      ) : activeTab === 'browse' ? (
         <>
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Browse Jobs</Text>
@@ -730,6 +783,65 @@ export default function JobsScreen() {
               style={styles.input}
             />
 
+            {locationText.trim() ? (
+              <View style={styles.filterGroup}>
+                <Text style={styles.filterLabel}>Distance from location</Text>
+                <View style={styles.filterRow}>
+                  {([10, 25, 50, 100] as const).map((radius) => (
+                    <Pressable
+                      key={radius}
+                      onPress={() => {
+                        setRadiusMiles(radius);
+                        setBrowsePage(1);
+                      }}
+                      style={[
+                        styles.filterChip,
+                        radiusMiles === radius && styles.filterChipActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.filterChipText,
+                          radiusMiles === radius && styles.filterChipTextActive,
+                        ]}
+                      >
+                        {radius} mi
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.filterGroup}>
+              <Text style={styles.filterLabel}>Sort by</Text>
+              <View style={styles.filterRow}>
+                {(['Relevance', 'Newest', 'Company'] as const).map((option) => (
+                  <Pressable
+                    key={option}
+                    onPress={() => {
+                      setSortOption(option);
+                      setBrowsePage(1);
+                    }}
+                    style={[
+                      styles.filterChip,
+                      sortOption === option && styles.filterChipActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.filterChipText,
+                        sortOption === option && styles.filterChipTextActive,
+                      ]}
+                    >
+                      {option}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            <Text style={styles.filterLabel}>Job type</Text>
             <View style={styles.filterRow}>
               {(['All', 'Internship', 'Remote'] as const).map((filter) => (
                 <Pressable
@@ -787,10 +899,27 @@ export default function JobsScreen() {
                     key={job.applyUrl || `${job.id || 'job'}-${job.title}-${job.company}-${index}`}
                     style={styles.jobCard}
                   >
-                    <Text style={styles.jobTitle}>{job.title}</Text>
-                    <Text style={styles.jobCompany}>
-                      {job.company} • {job.location}
-                    </Text>
+                    <View style={styles.jobTopRow}>
+                      <View style={styles.jobMainText}>
+                        <Text style={styles.jobTitle}>{job.title}</Text>
+                        <Text style={styles.jobCompany}>
+                          {job.company} • {job.location}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={[styles.saveButton, isJobSaved(job) && styles.saveButtonActive]}
+                        onPress={() => toggleSavedJob(job)}
+                        accessibilityRole="button"
+                        accessibilityLabel={isJobSaved(job) ? 'Remove saved job' : 'Save job'}
+                        hitSlop={8}
+                      >
+                        <Ionicons
+                          name={isJobSaved(job) ? 'bookmark' : 'bookmark-outline'}
+                          size={18}
+                          color={isJobSaved(job) ? '#ffffff' : '#93c5fd'}
+                        />
+                      </TouchableOpacity>
+                    </View>
                     <Text style={styles.jobType}>{job.type}</Text>
 
                     <TouchableOpacity
@@ -862,6 +991,65 @@ export default function JobsScreen() {
             )}
           </View>
         </>
+      ) : (
+        <View style={styles.sectionCard}>
+          <View style={styles.savedSectionHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>Saved Jobs</Text>
+              <Text style={styles.savedCountText}>
+                {savedJobs.length} {savedJobs.length === 1 ? 'job' : 'jobs'} saved on this device
+              </Text>
+            </View>
+            <Ionicons name="bookmark" size={22} color="#60a5fa" />
+          </View>
+
+          {!savedJobsHydrated ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator size="small" color="#60a5fa" />
+              <Text style={styles.loadingText}>Loading saved jobs...</Text>
+            </View>
+          ) : savedJobs.length === 0 ? (
+            <View style={styles.savedEmptyState}>
+              <View style={styles.savedEmptyIcon}>
+                <Ionicons name="bookmark-outline" size={26} color="#60a5fa" />
+              </View>
+              <Text style={styles.savedEmptyTitle}>No saved jobs yet</Text>
+              <Text style={styles.savedEmptyText}>
+                Tap the bookmark on any recommended or browse job to keep it here.
+              </Text>
+            </View>
+          ) : (
+            savedJobs.map((job) => (
+              <View key={job.applyUrl || job.id || `${job.company}-${job.title}`} style={styles.jobCard}>
+                <View style={styles.jobTopRow}>
+                  <View style={styles.jobMainText}>
+                    <Text style={styles.jobTitle}>{job.title}</Text>
+                    <Text style={styles.jobCompany}>
+                      {job.company} • {job.location}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.saveButton, styles.saveButtonActive]}
+                    onPress={() => toggleSavedJob(job)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Remove saved job"
+                    hitSlop={8}
+                  >
+                    <Ionicons name="bookmark" size={18} color="#ffffff" />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.jobType}>{job.type}</Text>
+                <TouchableOpacity
+                  style={styles.applyButton}
+                  activeOpacity={0.9}
+                  onPress={() => handleViewJob(job)}
+                >
+                  <Text style={styles.applyButtonText}>View Job</Text>
+                </TouchableOpacity>
+              </View>
+            ))
+          )}
+        </View>
       )}
     </ScrollView>
   );
@@ -1015,6 +1203,24 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 12,
   },
+  jobTopActions: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  saveButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(59,130,246,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(147,197,253,0.18)',
+  },
+  saveButtonActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+  },
   jobTitle: {
     color: '#ffffff',
     fontSize: 16,
@@ -1067,6 +1273,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginTop: 4,
+  },
+  filterGroup: {
+    marginTop: 4,
+  },
+  filterLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
   },
   filterChip: {
     backgroundColor: '#111827',
@@ -1140,6 +1357,43 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     fontSize: 13,
     fontWeight: '600',
+    textAlign: 'center',
+  },
+  savedSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  savedCountText: {
+    color: '#94a3b8',
+    fontSize: 13,
+    marginTop: -8,
+  },
+  savedEmptyState: {
+    alignItems: 'center',
+    paddingVertical: 30,
+    paddingHorizontal: 18,
+  },
+  savedEmptyIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(59,130,246,0.14)',
+    marginBottom: 14,
+  },
+  savedEmptyTitle: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  savedEmptyText: {
+    color: '#94a3b8',
+    fontSize: 14,
+    lineHeight: 21,
     textAlign: 'center',
   },
 });
