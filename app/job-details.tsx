@@ -1,10 +1,12 @@
 import { useJobDetails } from "@/context/JobDetailsContext";
+import { useResume } from "@/context/ResumeContext";
 import { useSavedJobs } from "@/context/SavedJobsContext";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useState } from "react";
 import {
   Alert,
+  ActivityIndicator,
   Linking,
   Pressable,
   ScrollView,
@@ -14,6 +16,18 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const API_URL = "https://careerhub-backend-xbe9.onrender.com";
+
+type MatchAnalysis = {
+  matchScore: number;
+  confidence: "High" | "Moderate" | "Limited";
+  summary: string;
+  matchingStrengths: string[];
+  notMentioned: string[];
+  experienceAlignment: string;
+  beforeApplying: string[];
+};
 
 function formatPostedDate(createdAt?: string): string | null {
   if (!createdAt) return null;
@@ -57,8 +71,14 @@ function formatSalary({
 
 export default function JobDetailsScreen() {
   const { selectedJob } = useJobDetails();
+  const { feedback } = useResume();
   const { isJobSaved, toggleSavedJob } = useSavedJobs();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [matchAnalysis, setMatchAnalysis] = useState<MatchAnalysis | null>(
+    null,
+  );
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [matchError, setMatchError] = useState<string | null>(null);
 
   if (!selectedJob) {
     return (
@@ -91,6 +111,68 @@ export default function JobDetailsScreen() {
     /^(?:\.{3}|…)|(?:\.{3}|…)$/.test(description);
   const canExpandDescription =
     !sourceOnlyProvidedPreview && description.length > 300;
+  const resumeSignals =
+    feedback?.isResume === true
+      ? {
+          careerPaths: feedback.careerPaths,
+          jobKeywords: feedback.jobKeywords,
+          recommendedSearchTerms: feedback.recommendedSearchTerms,
+        }
+      : null;
+
+  const handleAnalyzeMatch = async () => {
+    if (!resumeSignals) {
+      setMatchError("Upload and analyze a resume before comparing this job.");
+      return;
+    }
+
+    if (!description) {
+      setMatchError(
+        "This source did not provide enough job information to compare.",
+      );
+      return;
+    }
+
+    try {
+      setMatchLoading(true);
+      setMatchError(null);
+
+      const response = await fetch(`${API_URL}/jobs/match-analysis`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          resumeSignals,
+          job: {
+            title: selectedJob.title,
+            company: selectedJob.company,
+            location: selectedJob.location,
+            type: selectedJob.type,
+            description,
+            source: selectedJob.source,
+            isPreviewOnly: sourceOnlyProvidedPreview,
+          },
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Unable to analyze this match.");
+      }
+
+      setMatchAnalysis(data);
+    } catch (error: any) {
+      setMatchError(
+        error?.message ||
+          "Unable to analyze this match right now. Try again shortly.",
+      );
+    } finally {
+      setMatchLoading(false);
+    }
+  };
 
   const handleShare = async () => {
     const details = [
@@ -185,6 +267,163 @@ export default function JobDetailsScreen() {
             </View>
           </View>
         ) : null}
+
+        <View style={styles.breakdownCard}>
+          <View style={styles.breakdownHeader}>
+            <View style={styles.breakdownHeaderIcon}>
+              <Ionicons name="analytics-outline" size={21} color="#a5b4fc" />
+            </View>
+            <View style={styles.breakdownHeaderCopy}>
+              <Text style={styles.breakdownTitle}>Your match breakdown</Text>
+              <Text style={styles.breakdownSubtitle}>
+                Compare this opening with your resume analysis
+              </Text>
+            </View>
+          </View>
+
+          {!matchAnalysis ? (
+            <>
+              <Text style={styles.breakdownIntro}>
+                See the strengths that align, important qualifications not
+                mentioned in your resume analysis, and what to improve before
+                applying.
+              </Text>
+
+              {matchError ? (
+                <View style={styles.matchErrorBox}>
+                  <Ionicons
+                    name="alert-circle-outline"
+                    size={18}
+                    color="#fca5a5"
+                  />
+                  <Text style={styles.matchErrorText}>{matchError}</Text>
+                </View>
+              ) : null}
+
+              <Pressable
+                style={[
+                  styles.analyzeButton,
+                  matchLoading && styles.analyzeButtonDisabled,
+                ]}
+                disabled={matchLoading}
+                onPress={handleAnalyzeMatch}
+              >
+                {matchLoading ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Ionicons name="sparkles" size={19} color="#ffffff" />
+                )}
+                <Text style={styles.analyzeButtonText}>
+                  {matchLoading
+                    ? "Analyzing this match..."
+                    : "Analyze this match"}
+                </Text>
+              </Pressable>
+
+              <Text style={styles.onDemandNote}>
+                Runs only when requested. Identical comparisons are cached to
+                reduce usage.
+              </Text>
+            </>
+          ) : (
+            <View style={styles.analysisResults}>
+              <View style={styles.scoreRow}>
+                <View style={styles.scoreCircle}>
+                  <Text style={styles.scoreNumber}>
+                    {matchAnalysis.matchScore}
+                  </Text>
+                  <Text style={styles.scoreOutOf}>/100</Text>
+                </View>
+                <View style={styles.scoreCopy}>
+                  <Text style={styles.scoreLabel}>Resume alignment</Text>
+                  <View style={styles.confidenceBadge}>
+                    <Text style={styles.confidenceText}>
+                      {matchAnalysis.confidence} confidence
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <Text style={styles.analysisSummary}>
+                {matchAnalysis.summary}
+              </Text>
+
+              {matchAnalysis.matchingStrengths.length > 0 ? (
+                <View style={styles.analysisSection}>
+                  <Text style={styles.analysisSectionTitle}>What aligns</Text>
+                  {matchAnalysis.matchingStrengths.map((item, index) => (
+                    <View
+                      key={`${item}-${index}`}
+                      style={styles.analysisListRow}
+                    >
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={19}
+                        color="#34d399"
+                      />
+                      <Text style={styles.analysisListText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              {matchAnalysis.notMentioned.length > 0 ? (
+                <View style={styles.analysisSection}>
+                  <Text style={styles.analysisSectionTitle}>Not mentioned</Text>
+                  <Text style={styles.analysisSectionHint}>
+                    This does not mean you lack these qualifications—only that
+                    they were not found in the current resume analysis.
+                  </Text>
+                  {matchAnalysis.notMentioned.map((item, index) => (
+                    <View
+                      key={`${item}-${index}`}
+                      style={styles.analysisListRow}
+                    >
+                      <Ionicons
+                        name="help-circle-outline"
+                        size={19}
+                        color="#fbbf24"
+                      />
+                      <Text style={styles.analysisListText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              <View style={styles.analysisSection}>
+                <Text style={styles.analysisSectionTitle}>
+                  Experience alignment
+                </Text>
+                <Text style={styles.analysisParagraph}>
+                  {matchAnalysis.experienceAlignment}
+                </Text>
+              </View>
+
+              {matchAnalysis.beforeApplying.length > 0 ? (
+                <View style={styles.analysisSection}>
+                  <Text style={styles.analysisSectionTitle}>
+                    Before applying
+                  </Text>
+                  {matchAnalysis.beforeApplying.map((item, index) => (
+                    <View key={`${item}-${index}`} style={styles.actionListRow}>
+                      <View style={styles.actionNumber}>
+                        <Text style={styles.actionNumberText}>{index + 1}</Text>
+                      </View>
+                      <Text style={styles.analysisListText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              {sourceOnlyProvidedPreview ? (
+                <Text style={styles.limitedNotice}>
+                  This score uses a partial job description. Review the complete
+                  posting before applying.
+                </Text>
+              ) : null}
+            </View>
+          )}
+        </View>
 
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeadingRow}>
@@ -369,6 +608,154 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   matchText: { color: "#cbd5e1", fontSize: 14, lineHeight: 21 },
+  breakdownCard: {
+    backgroundColor: "#171f34",
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "rgba(129,140,248,0.34)",
+    marginBottom: 16,
+  },
+  breakdownHeader: { flexDirection: "row", alignItems: "center" },
+  breakdownHeaderIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: "rgba(99,102,241,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  breakdownHeaderCopy: { flex: 1 },
+  breakdownTitle: { color: "#ffffff", fontSize: 18, fontWeight: "800" },
+  breakdownSubtitle: { color: "#94a3b8", fontSize: 12, marginTop: 4 },
+  breakdownIntro: {
+    color: "#cbd5e1",
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 17,
+  },
+  analyzeButton: {
+    minHeight: 50,
+    borderRadius: 13,
+    backgroundColor: "#4f46e5",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 17,
+  },
+  analyzeButtonDisabled: { opacity: 0.72 },
+  analyzeButtonText: { color: "#ffffff", fontSize: 15, fontWeight: "800" },
+  onDemandNote: {
+    color: "#64748b",
+    fontSize: 11,
+    lineHeight: 16,
+    textAlign: "center",
+    marginTop: 9,
+  },
+  matchErrorBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "rgba(127,29,29,0.2)",
+    borderRadius: 11,
+    padding: 11,
+    marginTop: 13,
+  },
+  matchErrorText: { color: "#fecaca", fontSize: 12, lineHeight: 18, flex: 1 },
+  analysisResults: { marginTop: 18 },
+  scoreRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(15,23,42,0.6)",
+    borderRadius: 16,
+    padding: 15,
+  },
+  scoreCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 5,
+    borderColor: "#6366f1",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+  },
+  scoreNumber: { color: "#ffffff", fontSize: 24, fontWeight: "900" },
+  scoreOutOf: {
+    color: "#94a3b8",
+    fontSize: 10,
+    fontWeight: "700",
+    marginTop: 8,
+  },
+  scoreCopy: { marginLeft: 15, flex: 1 },
+  scoreLabel: { color: "#ffffff", fontSize: 16, fontWeight: "800" },
+  confidenceBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(99,102,241,0.2)",
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    marginTop: 7,
+  },
+  confidenceText: { color: "#c7d2fe", fontSize: 11, fontWeight: "800" },
+  analysisSummary: {
+    color: "#dbe3ef",
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 15,
+  },
+  analysisSection: {
+    borderTopWidth: 1,
+    borderTopColor: "rgba(148,163,184,0.13)",
+    paddingTop: 15,
+    marginTop: 15,
+  },
+  analysisSectionTitle: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "800",
+    marginBottom: 9,
+  },
+  analysisSectionHint: {
+    color: "#94a3b8",
+    fontSize: 11,
+    lineHeight: 17,
+    marginBottom: 10,
+  },
+  analysisListRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+    marginBottom: 9,
+  },
+  analysisListText: { color: "#cbd5e1", fontSize: 13, lineHeight: 19, flex: 1 },
+  analysisParagraph: { color: "#cbd5e1", fontSize: 13, lineHeight: 20 },
+  actionListRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    marginBottom: 10,
+  },
+  actionNumber: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(99,102,241,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actionNumberText: { color: "#c7d2fe", fontSize: 11, fontWeight: "900" },
+  limitedNotice: {
+    color: "#fcd34d",
+    fontSize: 11,
+    lineHeight: 17,
+    backgroundColor: "rgba(120,53,15,0.18)",
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 7,
+  },
   sectionCard: {
     backgroundColor: "#1e293b",
     borderRadius: 20,

@@ -1,4 +1,5 @@
 import cors from "cors";
+import { createHash } from "crypto";
 import dotenv from "dotenv";
 import express from "express";
 import fs from "fs";
@@ -35,6 +36,8 @@ const LEVER_BOARDS = (process.env.LEVER_BOARDS || "")
 const JOB_CACHE_TTL_MS = 1000 * 60 * 20;
 const jobCache = new Map();
 const sourceCache = new Map();
+const matchAnalysisCache = new Map();
+const MATCH_ANALYSIS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 
 const SOURCE_CACHE_TTL_MS = {
   muse: 1000 * 60 * 60,
@@ -86,6 +89,10 @@ function getJobDedupeKey(job) {
 
 function getCacheKey(namespace, payload = {}) {
   return `${namespace}:${JSON.stringify(payload)}`;
+}
+
+function getMatchAnalysisCacheKey(payload = {}) {
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
 function getCachedValue(key) {
@@ -1533,6 +1540,146 @@ app.get("/jobs/search", async (req, res) => {
     console.error("SEARCH JOBS ERROR:", error);
     res.status(500).json({
       error: "Failed to search jobs",
+      details: error?.message || "Unknown error",
+    });
+  }
+});
+
+app.post("/jobs/match-analysis", async (req, res) => {
+  try {
+    const resumeSignals = {
+      careerPaths: normalizeStringList(req.body?.resumeSignals?.careerPaths, {
+        max: 5,
+      }),
+      jobKeywords: normalizeStringList(req.body?.resumeSignals?.jobKeywords, {
+        max: 10,
+      }),
+      recommendedSearchTerms: normalizeStringList(
+        req.body?.resumeSignals?.recommendedSearchTerms,
+        { max: 8 },
+      ),
+    };
+
+    const job = {
+      title: asCleanString(req.body?.job?.title).slice(0, 250),
+      company: asCleanString(req.body?.job?.company).slice(0, 250),
+      location: asCleanString(req.body?.job?.location).slice(0, 250),
+      type: asCleanString(req.body?.job?.type).slice(0, 120),
+      description: asCleanString(req.body?.job?.description).slice(0, 20_000),
+      source: asCleanString(req.body?.job?.source).slice(0, 100),
+      isPreviewOnly: req.body?.job?.isPreviewOnly === true,
+    };
+
+    const hasResumeSignals = Object.values(resumeSignals).some(
+      (items) => items.length > 0,
+    );
+
+    if (!hasResumeSignals) {
+      return res.status(400).json({
+        error: "Resume analysis is required before comparing a job.",
+      });
+    }
+
+    if (!job.title || !job.company || !job.description) {
+      return res.status(400).json({
+        error: "A job title, company, and description are required.",
+      });
+    }
+
+    const cachePayload = { resumeSignals, job };
+    const cacheKey = getMatchAnalysisCacheKey(cachePayload);
+    const cached = matchAnalysisCache.get(cacheKey);
+
+    if (
+      cached &&
+      Date.now() - cached.createdAt <= MATCH_ANALYSIS_CACHE_TTL_MS
+    ) {
+      return res.json({ ...cached.value, cached: true });
+    }
+
+    const prompt = `
+You are an evidence-based career matching assistant for university students.
+Compare the resume analysis signals with the job posting below.
+
+Return ONLY valid JSON in exactly this shape:
+{
+  "matchScore": number,
+  "confidence": "High" | "Moderate" | "Limited",
+  "summary": "string",
+  "matchingStrengths": ["string", "string", "string"],
+  "notMentioned": ["string", "string", "string"],
+  "experienceAlignment": "string",
+  "beforeApplying": ["string", "string", "string"]
+}
+
+STRICT ACCURACY RULES:
+- Base every statement only on the supplied resume signals and job posting.
+- A resume signal may count as a match only when it directly or clearly semantically matches a job requirement.
+- Never claim the student lacks a skill. Use wording such as "Not mentioned in the current resume analysis."
+- matchingStrengths must contain 1 to 4 concise, evidence-based strengths.
+- notMentioned must contain 0 to 4 important requirements from the job that are not present in the resume signals.
+- beforeApplying must contain exactly 3 specific, practical actions.
+- matchScore must be an integer from 0 to 100 and must not be inflated.
+- If the posting is preview-only, confidence must be "Limited" and the summary must acknowledge that the comparison uses a partial description.
+- Otherwise, confidence may be High or Moderate depending on the evidence.
+- Keep the summary and experienceAlignment to no more than 2 sentences each.
+- Do not use markdown and do not include text outside the JSON.
+
+RESUME ANALYSIS SIGNALS:
+${JSON.stringify(resumeSignals)}
+
+JOB POSTING:
+${JSON.stringify(job)}
+`;
+
+    const response = await client.responses.create({
+      model: "gpt-5.4",
+      input: prompt,
+    });
+
+    const rawText = response.output_text
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "");
+    const parsed = JSON.parse(rawText);
+
+    const analysis = {
+      matchScore: Math.max(
+        0,
+        Math.min(100, Math.round(Number(parsed?.matchScore) || 0)),
+      ),
+      confidence: ["High", "Moderate", "Limited"].includes(parsed?.confidence)
+        ? parsed.confidence
+        : job.isPreviewOnly
+          ? "Limited"
+          : "Moderate",
+      summary: asCleanString(
+        parsed?.summary,
+        "CareerHub compared this role with the available resume analysis.",
+      ),
+      matchingStrengths: normalizeStringList(parsed?.matchingStrengths, {
+        max: 4,
+      }),
+      notMentioned: normalizeStringList(parsed?.notMentioned, { max: 4 }),
+      experienceAlignment: asCleanString(
+        parsed?.experienceAlignment,
+        "Review the role requirements alongside your experience before applying.",
+      ),
+      beforeApplying: normalizeStringList(parsed?.beforeApplying, {
+        max: 3,
+      }),
+    };
+
+    matchAnalysisCache.set(cacheKey, {
+      createdAt: Date.now(),
+      value: analysis,
+    });
+
+    res.json({ ...analysis, cached: false });
+  } catch (error) {
+    console.error("JOB MATCH ANALYSIS ERROR:", error);
+    res.status(500).json({
+      error: "Unable to analyze this job match right now.",
       details: error?.message || "Unknown error",
     });
   }
