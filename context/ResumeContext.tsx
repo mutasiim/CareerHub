@@ -47,14 +47,25 @@ type ResumeContextType = {
   setFeedback: (feedback: ResumeFeedback | null) => void;
   loading: boolean;
   setLoading: (loading: boolean) => void;
+  resumeRefreshKey: number;
 };
 
 const ResumeContext = createContext<ResumeContextType | undefined>(undefined);
 
 export function ResumeProvider({ children }: { children: React.ReactNode }) {
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<ResumeFeedback | null>(null);
+  const [fileName, setFileNameState] = useState<string | null>(null);
+  const [feedback, setFeedbackState] = useState<ResumeFeedback | null>(null);
   const [loading, setLoading] = useState(false);
+  const [resumeRefreshKey, setResumeRefreshKey] = useState(0);
+
+  const setFileName = (name: string | null) => {
+    setFileNameState(name);
+  };
+
+  const setFeedback = (nextFeedback: ResumeFeedback | null) => {
+    setFeedbackState(nextFeedback);
+    setResumeRefreshKey((current) => current + 1);
+  };
 
   return (
     <ResumeContext.Provider
@@ -65,6 +76,7 @@ export function ResumeProvider({ children }: { children: React.ReactNode }) {
         setFeedback,
         loading,
         setLoading,
+        resumeRefreshKey,
       }}
     >
       {children}

@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
 import { ResumeProvider } from '@/context/ResumeContext';
+import { SavedJobsProvider } from '@/context/SavedJobsContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -15,7 +16,8 @@ export default function RootLayout() {
 
   return (
     <ResumeProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <SavedJobsProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack
           screenOptions={{
             headerShown: false,
@@ -56,7 +58,8 @@ export default function RootLayout() {
   />
 </Stack>
         <StatusBar style="auto" />
-      </ThemeProvider>
+        </ThemeProvider>
+      </SavedJobsProvider>
     </ResumeProvider>
   );
 }

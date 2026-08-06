@@ -72,8 +72,13 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+
 function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function buildSectionParagraph(section?: FeedbackSectionData): string | undefined {
+  return section?.intro;
 }
 
 function normalizeFeedbackItems(value: unknown): FeedbackItem[] {
@@ -220,6 +225,7 @@ function normalizeFeedback(feedback: any): NormalizedFeedback {
         ? `${asNumber(scoreBreakdown.overallImpression ?? scoreBreakdown.overall_impression ?? scoreBreakdown.overall)}`
         : undefined,
       icon: 'sparkles-outline',
+      body: <Text style={styles.bodyText}>{buildSectionParagraph(overallSection)}</Text>,
       ...overallSection,
     });
   }
@@ -232,6 +238,7 @@ function normalizeFeedback(feedback: any): NormalizedFeedback {
         ? `${asNumber(scoreBreakdown.contentAndRelevance ?? scoreBreakdown.content_and_relevance ?? scoreBreakdown.content)}`
         : undefined,
       icon: 'document-text-outline',
+      body: <Text style={styles.bodyText}>{buildSectionParagraph(contentSection)}</Text>,
       ...contentSection,
     });
   }
@@ -244,6 +251,7 @@ function normalizeFeedback(feedback: any): NormalizedFeedback {
         ? `${asNumber(scoreBreakdown.formattingAndVisualAppeal ?? scoreBreakdown.formatting_and_visual_appeal ?? scoreBreakdown.formatting ?? scoreBreakdown.layout)}`
         : undefined,
       icon: 'grid-outline',
+      body: <Text style={styles.bodyText}>{buildSectionParagraph(formattingSection)}</Text>,
       ...formattingSection,
     });
   }
@@ -256,6 +264,7 @@ function normalizeFeedback(feedback: any): NormalizedFeedback {
         ? `${asNumber(scoreBreakdown.languageAndProfessionalism ?? scoreBreakdown.language_and_professionalism ?? scoreBreakdown.language ?? scoreBreakdown.professionalism)}`
         : undefined,
       icon: 'chatbubble-ellipses-outline',
+      body: <Text style={styles.bodyText}>{buildSectionParagraph(languageSection)}</Text>,
       ...languageSection,
     });
   }
@@ -269,13 +278,14 @@ function normalizeFeedback(feedback: any): NormalizedFeedback {
       title: 'Recommendations',
       icon: 'rocket-outline',
       body: (
-        <>
+        <View style={styles.feedbackGroup}>
           {recommendations.map((item, index) => (
-            <Text key={index} style={styles.bodyText}>
-              {index + 1}. {item}
-            </Text>
+            <View key={index} style={styles.recommendationItem}>
+              <Text style={styles.recommendationNumber}>{index + 1}</Text>
+              <Text style={styles.recommendationText}>{item}</Text>
+            </View>
           ))}
-        </>
+        </View>
       ),
     });
   }
@@ -291,7 +301,11 @@ function normalizeFeedback(feedback: any): NormalizedFeedback {
       key: 'notes',
       title: 'Additional Notes',
       icon: 'create-outline',
-      body: <Text style={styles.bodyText}>{additionalNotes}</Text>,
+      body: (
+        <View style={styles.notesBox}>
+          <Text style={styles.bodyText}>{additionalNotes}</Text>
+        </View>
+      ),
     });
   }
 
@@ -453,20 +467,6 @@ function ExpandableSection({
               },
             ]}
           >
-            {[
-              intro,
-              ...((highImpact ?? []).map((item) => [item.issue, item.fix].filter(Boolean).join(' '))),
-              ...((mediumImpact ?? []).map((item) => [item.issue, item.fix].filter(Boolean).join(' '))),
-              recruiterInsight,
-              outcome,
-            ]
-              .filter((text): text is string => Boolean(text && text.trim()))
-              .map((text, index) => (
-                <Text key={index} style={styles.bodyText}>
-                  {text}
-                </Text>
-              ))}
-
             {body}
           </Animated.View>
         ) : null}
@@ -839,13 +839,13 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   expandableCard: {
-    backgroundColor: '#1e293b',
-    padding: 22,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.04)',
-    overflow: 'hidden',
-  },
+  backgroundColor: '#1e293b',
+  padding: 16, // was 22
+  borderRadius: 18,
+  borderWidth: 1,
+  borderColor: 'rgba(255,255,255,0.04)',
+  overflow: 'hidden',
+},
   expandableCardExpanded: {
     backgroundColor: '#243041',
     borderColor: 'rgba(96,165,250,0.12)',
@@ -880,20 +880,93 @@ const styles = StyleSheet.create({
     marginTop: -2,
   },
   expandableBody: {
-    marginTop: 14,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.05)',
+  marginTop: 10,   // was 14
+  paddingTop: 10,  // was 8
+  borderTopWidth: 1,
+  borderTopColor: 'rgba(255,255,255,0.05)',
+},
+  feedbackGroup: {
+    marginTop: 8,
+    marginBottom: 14,
   },
-  feedbackItem: {
-    marginBottom: 0,
+  feedbackGroupTitle: {
+    color: '#bfdbfe',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  feedbackItemCard: {
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.12)',
   },
   feedbackIssue: {
     color: '#ffffff',
     fontSize: 15,
+    lineHeight: 23,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  feedbackFix: {
+    color: '#cbd5e1',
+    fontSize: 15,
     lineHeight: 24,
-    fontWeight: '600',
-    marginBottom: 0,
+  },
+  insightBox: {
+    backgroundColor: 'rgba(59,130,246,0.08)',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.14)',
+  },
+  insightLabel: {
+    color: '#93c5fd',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  recommendationItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.12)',
+  },
+  recommendationNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#2563eb',
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+    lineHeight: 28,
+    marginRight: 12,
+  },
+  recommendationText: {
+  flex: 1,
+  color: '#cbd5e1',
+  fontSize: 14.5,
+  lineHeight: 22,
+},
+  notesBox: {
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.12)',
   },
   card: {
     backgroundColor: '#1e293b',
@@ -908,17 +981,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   sectionTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
+  color: '#ffffff',
+  fontSize: 18,
+  fontWeight: '700',
+  marginBottom: 2, // was 6
+},
   bodyText: {
-    color: '#e2e8f0',
-    fontSize: 16,
-    lineHeight: 28,
-    marginBottom: 10,
-  },
+  color: '#cbd5e1',   // softer white
+  fontSize: 14.5,     // smaller
+  lineHeight: 22,     // tighter lines (big improvement)
+  marginBottom: 4,
+  letterSpacing: 0.2, // makes it easier to scan
+},
   message: {
     color: '#94a3b8',
     fontSize: 16,

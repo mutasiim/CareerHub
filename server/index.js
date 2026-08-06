@@ -1,12 +1,12 @@
-import cors from 'cors';
-import dotenv from 'dotenv';
-import express from 'express';
-import fs from 'fs';
-import multer from 'multer';
-import OpenAI from 'openai';
+import cors from "cors";
+import dotenv from "dotenv";
+import express from "express";
+import fs from "fs";
+import multer from "multer";
+import OpenAI from "openai";
 
-import { PDFParse } from 'pdf-parse';
-import { CanvasFactory } from 'pdf-parse/worker';
+import { PDFParse } from "pdf-parse";
+import { CanvasFactory } from "pdf-parse/worker";
 
 dotenv.config();
 
@@ -15,57 +15,70 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: "uploads/" });
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const ADZUNA_API_URL = 'https://api.adzuna.com/v1/api';
-const ADZUNA_COUNTRY = process.env.ADZUNA_COUNTRY || 'us';
-const GREENHOUSE_BOARDS = (process.env.GREENHOUSE_BOARDS || '')
-  .split(',')
+const ADZUNA_API_URL = "https://api.adzuna.com/v1/api";
+const ADZUNA_COUNTRY = process.env.ADZUNA_COUNTRY || "us";
+const GREENHOUSE_BOARDS = (process.env.GREENHOUSE_BOARDS || "")
+  .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
-const LEVER_BOARDS = (process.env.LEVER_BOARDS || '')
-  .split(',')
+const LEVER_BOARDS = (process.env.LEVER_BOARDS || "")
+  .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
 
 const JOB_CACHE_TTL_MS = 1000 * 60 * 20;
 const jobCache = new Map();
+const sourceCache = new Map();
 
-function asCleanString(value, fallback = '') {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
+const SOURCE_CACHE_TTL_MS = {
+  muse: 1000 * 60 * 60,
+  remotive: 1000 * 60 * 60 * 6,
+  usaJobs: 1000 * 60 * 30,
+  jooble: 1000 * 60 * 30,
+};
+
+function asCleanString(value, fallback = "") {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : fallback;
 }
 
 function toTitleCase(value) {
   return asCleanString(value)
     .toLowerCase()
-    .replace(/[_-]+/g, ' ')
+    .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function normalizeForDedupe(value = '') {
+function normalizeForDedupe(value = "") {
   return asCleanString(value)
     .toLowerCase()
-    .replace(/\b(internship|intern|co-op|coop|remote|hybrid|full-time|full time|part-time|part time|summer|fall|spring|2025|2026|2027)\b/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(
+      /\b(internship|intern|co-op|coop|remote|hybrid|full-time|full time|part-time|part time|summer|fall|spring|2025|2026|2027)\b/g,
+      "",
+    )
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-function normalizeForSearch(value = '') {
+function normalizeForSearch(value = "") {
   return asCleanString(value)
     .toLowerCase()
-    .replace(/[^a-z0-9+#.\s-]+/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/[^a-z0-9+#.\s-]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
 function getJobDedupeKey(job) {
-  const company = normalizeForDedupe(job?.company || '');
-  const title = normalizeForDedupe(job?.title || '');
+  const company = normalizeForDedupe(job?.company || "");
+  const title = normalizeForDedupe(job?.title || "");
 
   return `${company}-${title}`;
 }
@@ -94,32 +107,50 @@ function setCachedValue(key, value) {
   });
 }
 
-function buildFitLabel(searchQuery, haystack) {
-  const normalizedQuery = asCleanString(searchQuery).toLowerCase();
-  if (!normalizedQuery) return 'Good Match';
+async function getOrLoadSource(key, ttlMs, loader) {
+  const cached = sourceCache.get(key);
 
-  if (haystack.includes(normalizedQuery)) {
-    return 'High Match';
+  if (cached && Date.now() - cached.createdAt <= ttlMs) {
+    return cached.value;
   }
 
-  const words = normalizedQuery
-    .split(/\s+/)
-    .filter((word) => word.length > 2);
+  const pending = Promise.resolve().then(loader);
+  sourceCache.set(key, { createdAt: Date.now(), value: pending });
+
+  try {
+    const value = await pending;
+    sourceCache.set(key, { createdAt: Date.now(), value });
+    return value;
+  } catch (error) {
+    sourceCache.delete(key);
+    throw error;
+  }
+}
+
+function buildFitLabel(searchQuery, haystack) {
+  const normalizedQuery = asCleanString(searchQuery).toLowerCase();
+  if (!normalizedQuery) return "Good Match";
+
+  if (haystack.includes(normalizedQuery)) {
+    return "High Match";
+  }
+
+  const words = normalizedQuery.split(/\s+/).filter((word) => word.length > 2);
 
   const matchedWords = words.filter((word) => haystack.includes(word));
 
   if (matchedWords.length >= Math.min(2, words.length)) {
-    return 'High Match';
+    return "High Match";
   }
 
   if (matchedWords.length > 0) {
-    return 'Potential Match';
+    return "Potential Match";
   }
 
-  return 'Good Match';
+  return "Good Match";
 }
 
-function matchesSearchText(search = '', haystack = '') {
+function matchesSearchText(search = "", haystack = "") {
   const normalizedSearch = normalizeForSearch(search);
   const normalizedHaystack = normalizeForSearch(haystack);
 
@@ -133,7 +164,9 @@ function matchesSearchText(search = '', haystack = '') {
 
   if (words.length === 0) return true;
 
-  const matchedWords = words.filter((word) => normalizedHaystack.includes(word));
+  const matchedWords = words.filter((word) =>
+    normalizedHaystack.includes(word),
+  );
   return matchedWords.length >= Math.min(2, words.length);
 }
 
@@ -142,26 +175,26 @@ function isInternshipJob(job) {
   const type = asCleanString(job?.type).toLowerCase();
 
   const blockedTitleKeywords = [
-    'professor',
-    'faculty',
-    'lecturer',
-    'instructor',
-    'tenure',
-    'surgeon',
-    'physician',
-    'physical therapist',
-    'therapist',
-    'vp',
-    'vice president',
-    'director',
-    'manager',
-    'senior',
-    'sr.',
-    'sr ',
-    'principal',
-    'lead ',
-    'chief',
-    'head of',
+    "professor",
+    "faculty",
+    "lecturer",
+    "instructor",
+    "tenure",
+    "surgeon",
+    "physician",
+    "physical therapist",
+    "therapist",
+    "vp",
+    "vice president",
+    "director",
+    "manager",
+    "senior",
+    "sr.",
+    "sr ",
+    "principal",
+    "lead ",
+    "chief",
+    "head of",
   ];
 
   if (blockedTitleKeywords.some((keyword) => title.includes(keyword))) {
@@ -169,25 +202,25 @@ function isInternshipJob(job) {
   }
 
   const titleInternshipKeywords = [
-    'intern',
-    'internship',
-    'co-op',
-    'coop',
-    'co op',
-    'student worker',
-    'student assistant',
-    'student trainee',
-    'work study',
-    'work-study',
-    'trainee',
-    'fellowship',
+    "intern",
+    "internship",
+    "co-op",
+    "coop",
+    "co op",
+    "student worker",
+    "student assistant",
+    "student trainee",
+    "work study",
+    "work-study",
+    "trainee",
+    "fellowship",
   ];
 
   if (titleInternshipKeywords.some((keyword) => title.includes(keyword))) {
     return true;
   }
 
-  return type === 'internship';
+  return type === "internship";
 }
 
 function isRemoteJob(job) {
@@ -200,50 +233,62 @@ function isRemoteJob(job) {
   const fullText = `${strongText} ${description}`;
 
   if (
-    strongText.includes('remote') ||
-    strongText.includes('work from home') ||
-    strongText.includes('wfh') ||
-    strongText.includes('virtual') ||
-    strongText.includes('telework') ||
-    strongText.includes('telecommute') ||
-    strongText.includes('anywhere') ||
-    strongText.includes('hybrid')
+    strongText.includes("remote") ||
+    strongText.includes("work from home") ||
+    strongText.includes("wfh") ||
+    strongText.includes("virtual") ||
+    strongText.includes("telework") ||
+    strongText.includes("telecommute") ||
+    strongText.includes("anywhere") ||
+    strongText.includes("hybrid")
   ) {
     return true;
   }
 
   return (
-    fullText.includes('fully remote') ||
-    fullText.includes('100% remote') ||
-    fullText.includes('remote position') ||
-    fullText.includes('remote role') ||
-    fullText.includes('remote opportunity')
+    fullText.includes("fully remote") ||
+    fullText.includes("100% remote") ||
+    fullText.includes("remote position") ||
+    fullText.includes("remote role") ||
+    fullText.includes("remote opportunity")
   );
 }
 
-function inferJobType({ title = '', type = '', description = '', location = '' } = {}) {
+function inferJobType({
+  title = "",
+  type = "",
+  description = "",
+  location = "",
+} = {}) {
   const haystack = `${title} ${type} ${description} ${location}`.toLowerCase();
 
-  if (isInternshipJob({ title, type, description, location, company: '' })) return 'Internship';
-  if (haystack.includes('part time') || haystack.includes('part-time')) return 'Part Time';
-  if (haystack.includes('full time') || haystack.includes('full-time')) return 'Full Time';
-  if (haystack.includes('contract')) return 'Contract';
-  if (isRemoteJob({ title, type, description, location, company: '' })) return 'Remote / Hybrid';
+  if (isInternshipJob({ title, type, description, location, company: "" }))
+    return "Internship";
+  if (haystack.includes("part time") || haystack.includes("part-time"))
+    return "Part Time";
+  if (haystack.includes("full time") || haystack.includes("full-time"))
+    return "Full Time";
+  if (haystack.includes("contract")) return "Contract";
+  if (isRemoteJob({ title, type, description, location, company: "" }))
+    return "Remote / Hybrid";
 
-  return 'Role';
+  return "Role";
 }
 
-function normalizeAdzunaJob(job, searchQuery = '') {
-  const title = asCleanString(job?.title, 'Untitled Role');
-  const company = asCleanString(job?.company?.display_name, 'Unknown Company');
+function normalizeAdzunaJob(job, searchQuery = "") {
+  const title = asCleanString(job?.title, "Untitled Role");
+  const company = asCleanString(job?.company?.display_name, "Unknown Company");
   const location = asCleanString(
-    job?.location?.display_name || job?.location?.area?.join(', '),
-    'Location not specified'
+    job?.location?.display_name || job?.location?.area?.join(", "),
+    "Location not specified",
   );
   const description = asCleanString(job?.description);
   const rawType = asCleanString(job?.contract_type || job?.contract_time);
-  const type = rawType ? toTitleCase(rawType) : inferJobType({ title, description, location });
-  const haystack = `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
+  const type = rawType
+    ? toTitleCase(rawType)
+    : inferJobType({ title, description, location });
+  const haystack =
+    `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
 
   return {
     id: job?.id ? String(job.id) : undefined,
@@ -254,24 +299,32 @@ function normalizeAdzunaJob(job, searchQuery = '') {
     fit: buildFitLabel(searchQuery, haystack),
     applyUrl: asCleanString(job?.redirect_url || job?.adref) || undefined,
     createdAt: asCleanString(job?.created) || undefined,
-    source: 'Adzuna',
+    salaryMin: Number.isFinite(Number(job?.salary_min))
+      ? Number(job.salary_min)
+      : undefined,
+    salaryMax: Number.isFinite(Number(job?.salary_max))
+      ? Number(job.salary_max)
+      : undefined,
+    source: "Adzuna",
     description,
   };
 }
 
-function normalizeGreenhouseJob(job, boardToken, searchQuery = '') {
-  const title = asCleanString(job?.title, 'Untitled Role');
-  const company = toTitleCase(boardToken.replace(/[-_]+/g, ' ')) || 'Greenhouse Company';
-  const location = asCleanString(job?.location?.name, 'Location not specified');
+function normalizeGreenhouseJob(job, boardToken, searchQuery = "") {
+  const title = asCleanString(job?.title, "Untitled Role");
+  const company =
+    toTitleCase(boardToken.replace(/[-_]+/g, " ")) || "Greenhouse Company";
+  const location = asCleanString(job?.location?.name, "Location not specified");
   const metadataText = Array.isArray(job?.metadata)
     ? job.metadata
         .flatMap((item) => [item?.name, item?.value])
         .filter(Boolean)
-        .join(' ')
-    : '';
+        .join(" ")
+    : "";
   const description = asCleanString(job?.content || metadataText);
   const type = inferJobType({ title, description, location });
-  const haystack = `${title} ${company} ${location} ${type} ${metadataText} ${description}`.toLowerCase();
+  const haystack =
+    `${title} ${company} ${location} ${type} ${metadataText} ${description}`.toLowerCase();
 
   return {
     id: job?.id ? `greenhouse-${job.id}` : undefined,
@@ -281,21 +334,27 @@ function normalizeGreenhouseJob(job, boardToken, searchQuery = '') {
     type,
     fit: buildFitLabel(searchQuery, haystack),
     applyUrl:
-      asCleanString(job?.absolute_url || `https://boards.greenhouse.io/${boardToken}/jobs/${job?.id}`) ||
-      undefined,
-    source: 'Greenhouse',
+      asCleanString(
+        job?.absolute_url ||
+          `https://boards.greenhouse.io/${boardToken}/jobs/${job?.id}`,
+      ) || undefined,
+    source: "Greenhouse",
     description,
   };
 }
 
-function normalizeLeverJob(job, site, searchQuery = '') {
-  const title = asCleanString(job?.text, 'Untitled Role');
-  const company = toTitleCase(site.replace(/[-_]+/g, ' ')) || 'Lever Company';
-  const location = asCleanString(job?.categories?.location, 'Location not specified');
+function normalizeLeverJob(job, site, searchQuery = "") {
+  const title = asCleanString(job?.text, "Untitled Role");
+  const company = toTitleCase(site.replace(/[-_]+/g, " ")) || "Lever Company";
+  const location = asCleanString(
+    job?.categories?.location,
+    "Location not specified",
+  );
   const description = asCleanString(job?.descriptionPlain || job?.description);
   const rawType = asCleanString(job?.categories?.commitment);
   const type = rawType || inferJobType({ title, description, location });
-  const haystack = `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
+  const haystack =
+    `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
 
   return {
     id: job?.id ? `lever-${job.id}` : undefined,
@@ -304,8 +363,153 @@ function normalizeLeverJob(job, site, searchQuery = '') {
     location,
     type,
     fit: buildFitLabel(searchQuery, haystack),
-    applyUrl: asCleanString(job?.hostedUrl || `https://jobs.lever.co/${site}/${job?.id}`) || undefined,
-    source: 'Lever',
+    applyUrl:
+      asCleanString(
+        job?.hostedUrl || `https://jobs.lever.co/${site}/${job?.id}`,
+      ) || undefined,
+    source: "Lever",
+    description,
+  };
+}
+
+function stripHtml(value = "") {
+  return asCleanString(value)
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeMuseJob(job, searchQuery = "") {
+  const title = asCleanString(job?.name, "Untitled Role");
+  const company = asCleanString(job?.company?.name, "Unknown Company");
+  const location = Array.isArray(job?.locations)
+    ? uniqueNonEmptyStrings(
+        job.locations.map((item) => item?.name),
+        3,
+      ).join("; ")
+    : "Location not specified";
+  const description = stripHtml(job?.contents);
+  const type = inferJobType({ title, description, location });
+  const haystack =
+    `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
+
+  return {
+    id: job?.id ? `muse-${job.id}` : undefined,
+    title,
+    company,
+    location: location || "Location not specified",
+    type,
+    fit: buildFitLabel(searchQuery, haystack),
+    applyUrl: asCleanString(job?.refs?.landing_page) || undefined,
+    createdAt: asCleanString(job?.publication_date) || undefined,
+    source: "The Muse",
+    description,
+  };
+}
+
+function normalizeRemotiveJob(job, searchQuery = "") {
+  const title = asCleanString(job?.title, "Untitled Role");
+  const company = asCleanString(job?.company_name, "Unknown Company");
+  const location = asCleanString(job?.candidate_required_location, "Remote");
+  const description = stripHtml(job?.description);
+  const rawType = asCleanString(job?.job_type);
+  const type = rawType ? toTitleCase(rawType) : "Remote";
+  const haystack =
+    `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
+
+  return {
+    id: job?.id ? `remotive-${job.id}` : undefined,
+    title,
+    company,
+    location,
+    type,
+    fit: buildFitLabel(searchQuery, haystack),
+    applyUrl: asCleanString(job?.url) || undefined,
+    createdAt: asCleanString(job?.publication_date) || undefined,
+    salaryText: asCleanString(job?.salary) || undefined,
+    source: "Remotive",
+    description,
+  };
+}
+
+function normalizeUsaJobsJob(item, searchQuery = "") {
+  const job = item?.MatchedObjectDescriptor || item || {};
+  const locations = Array.isArray(job?.PositionLocation)
+    ? job.PositionLocation.map((entry) => entry?.LocationName)
+    : [];
+  const title = asCleanString(job?.PositionTitle, "Untitled Role");
+  const company = asCleanString(
+    job?.OrganizationName || job?.DepartmentName,
+    "U.S. Federal Government",
+  );
+  const location =
+    uniqueNonEmptyStrings(locations, 3).join("; ") || "United States";
+  const details = job?.UserArea?.Details || {};
+  const description = stripHtml(
+    [
+      details?.JobSummary,
+      details?.MajorDuties,
+      details?.Education,
+      details?.Requirements,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+  const type = inferJobType({ title, description, location });
+  const remuneration = Array.isArray(job?.PositionRemuneration)
+    ? job.PositionRemuneration[0]
+    : undefined;
+  const haystack =
+    `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
+
+  return {
+    id: asCleanString(job?.PositionID || item?.MatchedObjectId) || undefined,
+    title,
+    company,
+    location,
+    type,
+    fit: buildFitLabel(searchQuery, haystack),
+    applyUrl:
+      asCleanString(job?.PositionURI || job?.ApplyURI?.[0]) || undefined,
+    createdAt:
+      asCleanString(job?.PublicationStartDate || job?.PositionStartDate) ||
+      undefined,
+    salaryMin: Number.isFinite(Number(remuneration?.MinimumRange))
+      ? Number(remuneration.MinimumRange)
+      : undefined,
+    salaryMax: Number.isFinite(Number(remuneration?.MaximumRange))
+      ? Number(remuneration.MaximumRange)
+      : undefined,
+    source: "USAJOBS",
+    description,
+  };
+}
+
+function normalizeJoobleJob(job, searchQuery = "") {
+  const title = asCleanString(job?.title, "Untitled Role");
+  const company = asCleanString(job?.company, "Unknown Company");
+  const location = asCleanString(job?.location, "Location not specified");
+  const description = stripHtml(job?.snippet);
+  const type =
+    asCleanString(job?.type) || inferJobType({ title, description, location });
+  const haystack =
+    `${title} ${company} ${location} ${type} ${description}`.toLowerCase();
+
+  return {
+    id: job?.id ? `jooble-${job.id}` : undefined,
+    title,
+    company,
+    location,
+    type,
+    fit: buildFitLabel(searchQuery, haystack),
+    applyUrl: asCleanString(job?.link) || undefined,
+    createdAt: asCleanString(job?.updated) || undefined,
+    salaryText: asCleanString(job?.salary) || undefined,
+    source: "Jooble",
     description,
   };
 }
@@ -316,14 +520,16 @@ function buildRecommendedRoles(jobs) {
   if (topJobs.length > 0) {
     return topJobs.map((job) => ({
       title: job.title,
-      reason: 'This role is being recommended based on the uploaded resume and detected career direction.',
+      reason:
+        "This role is being recommended based on the uploaded resume and detected career direction.",
     }));
   }
 
   return [
     {
-      title: 'Relevant Internship or Entry-Level Role',
-      reason: 'This role is being recommended based on the uploaded resume and detected career direction.',
+      title: "Relevant Internship or Entry-Level Role",
+      reason:
+        "This role is being recommended based on the uploaded resume and detected career direction.",
     },
   ];
 }
@@ -331,34 +537,33 @@ function buildRecommendedRoles(jobs) {
 function normalizeStringList(value, { max = 8 } = {}) {
   const cleaned = Array.isArray(value)
     ? value
-        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
         .filter(Boolean)
     : [];
 
   return Array.from(new Set(cleaned)).slice(0, max);
 }
 
-function normalizeRolePhrase(value = '') {
+function normalizeRolePhrase(value = "") {
   return asCleanString(value)
     .toLowerCase()
-    .replace(/[()]/g, ' ')
-    .replace(/\b(remote|hybrid|virtual|internship|intern|co-op|coop|full-time|full time|part-time|part time|entry-level|entry level)\b/g, ' ')
-    .replace(/[^a-z0-9+#.]+/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/[()]/g, " ")
+    .replace(
+      /\b(remote|hybrid|virtual|internship|intern|co-op|coop|full-time|full time|part-time|part time|entry-level|entry level)\b/g,
+      " ",
+    )
+    .replace(/[^a-z0-9+#.]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
 function uniqueNonEmptyStrings(values, max = 10) {
   return Array.from(
-    new Set(
-      values
-        .map((value) => asCleanString(value))
-        .filter(Boolean)
-    )
+    new Set(values.map((value) => asCleanString(value)).filter(Boolean)),
   ).slice(0, max);
 }
 
-function buildBaseResumeTermsFromText(resumeText = '') {
+function buildBaseResumeTermsFromText(resumeText = "") {
   const normalized = asCleanString(resumeText).toLowerCase();
   const candidatePatterns = [
     /\b([a-z]{3,}(?:\s+[a-z]{3,}){0,2}\s+(?:research assistant|researcher|analyst|technician|scientist|assistant|intern|developer|engineer|specialist|coordinator|tutor))\b/g,
@@ -374,32 +579,43 @@ function buildBaseResumeTermsFromText(resumeText = '') {
 
   const simpleFallbacks = uniqueNonEmptyStrings(
     [
-      ...(normalized.includes('research') ? ['research assistant'] : []),
-      ...(normalized.includes('lab') || normalized.includes('laboratory') ? ['laboratory assistant'] : []),
-      ...(normalized.includes('analysis') || normalized.includes('analyst') ? ['analyst'] : []),
-      ...(normalized.includes('teaching') || normalized.includes('tutor') ? ['teaching assistant'] : []),
-      ...(normalized.includes('communication') ? ['communications intern'] : []),
-      ...(normalized.includes('marketing') ? ['marketing intern'] : []),
+      ...(normalized.includes("research") ? ["research assistant"] : []),
+      ...(normalized.includes("lab") || normalized.includes("laboratory")
+        ? ["laboratory assistant"]
+        : []),
+      ...(normalized.includes("analysis") || normalized.includes("analyst")
+        ? ["analyst"]
+        : []),
+      ...(normalized.includes("teaching") || normalized.includes("tutor")
+        ? ["teaching assistant"]
+        : []),
+      ...(normalized.includes("communication")
+        ? ["communications intern"]
+        : []),
+      ...(normalized.includes("marketing") ? ["marketing intern"] : []),
     ],
-    6
+    6,
   );
 
   return uniqueNonEmptyStrings(
-    [...rawMatches.map((item) => normalizeRolePhrase(item)), ...simpleFallbacks],
-    8
+    [
+      ...rawMatches.map((item) => normalizeRolePhrase(item)),
+      ...simpleFallbacks,
+    ],
+    8,
   ).filter((term) => term.length >= 4);
 }
 
-function buildGenericSearchVariants(baseQuery = '', filter = 'All') {
+function buildGenericSearchVariants(baseQuery = "", filter = "All") {
   const exact = asCleanString(baseQuery).toLowerCase();
   const normalized = normalizeRolePhrase(baseQuery);
 
   if (!exact && !normalized) {
-    return filter === 'All'
-      ? ['internship', 'research assistant']
-      : filter === 'Internship'
-      ? ['internship']
-      : ['remote internship', 'hybrid internship'];
+    return filter === "All"
+      ? ["internship", "research assistant"]
+      : filter === "Internship"
+        ? ["internship"]
+        : ["remote internship", "hybrid internship"];
   }
 
   const variants = uniqueNonEmptyStrings([exact, normalized], 8);
@@ -408,33 +624,33 @@ function buildGenericSearchVariants(baseQuery = '', filter = 'All') {
     const words = normalized.split(/\s+/).filter(Boolean);
 
     if (words.length >= 3) {
-      variants.push(words.slice(0, 2).join(' '));
-      variants.push(words.slice(0, 3).join(' '));
-      variants.push(words.slice(-2).join(' '));
+      variants.push(words.slice(0, 2).join(" "));
+      variants.push(words.slice(0, 3).join(" "));
+      variants.push(words.slice(-2).join(" "));
     } else if (words.length === 2) {
-      variants.push(words.join(' '));
+      variants.push(words.join(" "));
       variants.push(words[0]);
     }
   }
 
   const cleaned = uniqueNonEmptyStrings(variants, 8);
 
-  if (filter === 'Internship') {
+  if (filter === "Internship") {
     return uniqueNonEmptyStrings(
       cleaned.flatMap((term) => [
-        term.includes('intern') ? term : `${term} intern`,
-        term.includes('internship') ? term : `${term} internship`,
-        term.includes('assistant') ? term : `${term} assistant`,
+        term.includes("intern") ? term : `${term} intern`,
+        term.includes("internship") ? term : `${term} internship`,
+        term.includes("assistant") ? term : `${term} assistant`,
         term,
       ]),
-      10
+      10,
     );
   }
 
-  if (filter === 'Remote') {
+  if (filter === "Remote") {
     return uniqueNonEmptyStrings(
       cleaned.flatMap((term) => [
-        term.includes('remote') ? term : `remote ${term}`,
+        term.includes("remote") ? term : `remote ${term}`,
         `${term} remote`,
         `virtual ${term}`,
         `${term} virtual`,
@@ -446,14 +662,14 @@ function buildGenericSearchVariants(baseQuery = '', filter = 'All') {
         `hybrid ${term}`,
         term,
       ]),
-      12
+      12,
     );
   }
 
   return cleaned;
 }
 
-function inferResumeJobProfile(resumeText = '') {
+function inferResumeJobProfile(resumeText = "") {
   const fallbackTerms = buildBaseResumeTermsFromText(resumeText);
 
   if (fallbackTerms.length > 0) {
@@ -461,67 +677,93 @@ function inferResumeJobProfile(resumeText = '') {
       careerPaths: fallbackTerms.map((term) => toTitleCase(term)).slice(0, 5),
       jobKeywords: fallbackTerms.slice(0, 8),
       recommendedSearchTerms: fallbackTerms
-        .map((term) => (term.includes('intern') || term.includes('assistant') ? term : `${term} intern`))
+        .map((term) =>
+          term.includes("intern") || term.includes("assistant")
+            ? term
+            : `${term} intern`,
+        )
         .slice(0, 6),
     };
   }
 
   return {
-    careerPaths: ['General Internship', 'Research Assistant', 'Entry-Level Analyst'],
-    jobKeywords: ['internship', 'research', 'analysis'],
-    recommendedSearchTerms: ['internship', 'research assistant', 'entry level analyst'],
+    careerPaths: [
+      "General Internship",
+      "Research Assistant",
+      "Entry-Level Analyst",
+    ],
+    jobKeywords: ["internship", "research", "analysis"],
+    recommendedSearchTerms: [
+      "internship",
+      "research assistant",
+      "entry level analyst",
+    ],
   };
 }
 
-function enrichResumeAnalysis(parsed, resumeText = '') {
+function enrichResumeAnalysis(parsed, resumeText = "") {
   if (!parsed || parsed.isResume !== true) return parsed;
 
   const fallbackProfile = inferResumeJobProfile(resumeText);
 
   const careerPaths = normalizeStringList(parsed.careerPaths, { max: 5 });
   const jobKeywords = normalizeStringList(parsed.jobKeywords, { max: 8 });
-  const recommendedSearchTerms = normalizeStringList(parsed.recommendedSearchTerms, { max: 6 });
+  const recommendedSearchTerms = normalizeStringList(
+    parsed.recommendedSearchTerms,
+    { max: 6 },
+  );
 
   return {
     ...parsed,
-    careerPaths: careerPaths.length > 0 ? careerPaths : fallbackProfile.careerPaths,
-    jobKeywords: jobKeywords.length > 0 ? jobKeywords : fallbackProfile.jobKeywords,
+    careerPaths:
+      careerPaths.length > 0 ? careerPaths : fallbackProfile.careerPaths,
+    jobKeywords:
+      jobKeywords.length > 0 ? jobKeywords : fallbackProfile.jobKeywords,
     recommendedSearchTerms:
-      recommendedSearchTerms.length > 0 ? recommendedSearchTerms : fallbackProfile.recommendedSearchTerms,
+      recommendedSearchTerms.length > 0
+        ? recommendedSearchTerms
+        : fallbackProfile.recommendedSearchTerms,
   };
 }
 
-function buildSearchVariants(baseQuery = '', filter = 'All') {
+function buildSearchVariants(baseQuery = "", filter = "All") {
   return buildGenericSearchVariants(baseQuery, filter);
 }
 
 function buildRoleRecommendationsFromCareerPaths(careerPaths = []) {
   return uniqueNonEmptyStrings(careerPaths, 5).map((path) => ({
     title: path,
-    reason: 'This role is being recommended based on the uploaded resume and detected career direction.',
+    reason:
+      "This role is being recommended based on the uploaded resume and detected career direction.",
   }));
 }
 
-function buildRecommendedSearchInputs({ searchTerms = [], careerPaths = [], jobKeywords = [] } = {}) {
+function buildRecommendedSearchInputs({
+  searchTerms = [],
+  careerPaths = [],
+  jobKeywords = [],
+} = {}) {
   const preferredTerms = normalizeStringList(searchTerms, { max: 6 });
   const secondaryTerms = normalizeStringList(careerPaths, { max: 5 });
   const tertiaryTerms = normalizeStringList(jobKeywords, { max: 8 });
 
   const baseTerms = uniqueNonEmptyStrings(
-    [...preferredTerms, ...secondaryTerms, ...tertiaryTerms].map((term) => normalizeRolePhrase(term) || asCleanString(term)),
-    10
+    [...preferredTerms, ...secondaryTerms, ...tertiaryTerms].map(
+      (term) => normalizeRolePhrase(term) || asCleanString(term),
+    ),
+    10,
   );
 
   if (baseTerms.length === 0) {
     return {
-      searchTerms: ['internship', 'research assistant', 'entry level analyst'],
-      primaryQuery: 'internship',
+      searchTerms: ["internship", "research assistant", "entry level analyst"],
+      primaryQuery: "internship",
     };
   }
 
   const expandedTerms = uniqueNonEmptyStrings(
-    baseTerms.flatMap((term) => buildGenericSearchVariants(term, 'Internship')),
-    12
+    baseTerms.flatMap((term) => buildGenericSearchVariants(term, "Internship")),
+    12,
   );
 
   return {
@@ -531,7 +773,7 @@ function buildRecommendedSearchInputs({ searchTerms = [], careerPaths = [], jobK
 }
 
 function getJobHaystack(job) {
-  return `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ''}`.toLowerCase();
+  return `${job.title} ${job.company} ${job.location} ${job.type} ${job.description || ""}`.toLowerCase();
 }
 
 function scoreJob(job, context = {}) {
@@ -540,8 +782,13 @@ function scoreJob(job, context = {}) {
   const searchTerms = context.searchTerms || [];
   const careerPaths = context.careerPaths || [];
   const jobKeywords = context.jobKeywords || [];
-  const allTerms = uniqueNonEmptyStrings([...searchTerms, ...careerPaths, ...jobKeywords], 25)
-    .map((term) => normalizeRolePhrase(term) || asCleanString(term).toLowerCase())
+  const allTerms = uniqueNonEmptyStrings(
+    [...searchTerms, ...careerPaths, ...jobKeywords],
+    25,
+  )
+    .map(
+      (term) => normalizeRolePhrase(term) || asCleanString(term).toLowerCase(),
+    )
     .filter(Boolean);
 
   let score = 0;
@@ -563,7 +810,16 @@ function scoreJob(job, context = {}) {
   if (job.description) score += 2;
   if (isRemoteJob(job)) score += 1;
 
-  const seniorNegative = ['senior', 'sr.', 'manager', 'director', 'principal', 'lead ', 'head of', 'chief'];
+  const seniorNegative = [
+    "senior",
+    "sr.",
+    "manager",
+    "director",
+    "principal",
+    "lead ",
+    "head of",
+    "chief",
+  ];
   if (seniorNegative.some((word) => title.includes(word))) score -= 20;
 
   return score;
@@ -576,15 +832,20 @@ function rankJobs(jobs, context = {}) {
       return {
         ...job,
         matchScore: score,
-        fit: score >= 24 ? 'High Match' : score >= 12 ? 'Good Match' : job.fit || 'Potential Match',
+        fit:
+          score >= 24
+            ? "High Match"
+            : score >= 12
+              ? "Good Match"
+              : job.fit || "Potential Match",
       };
     })
     .sort((a, b) => b.matchScore - a.matchScore);
 }
 
 async function fetchAdzunaJobs({
-  search = '',
-  location = '',
+  search = "",
+  location = "",
   radiusKm,
   page = 1,
   resultsPerPage = 50,
@@ -593,22 +854,23 @@ async function fetchAdzunaJobs({
   const appKey = process.env.ADZUNA_APP_KEY;
 
   if (!appId || !appKey) {
-    throw new Error('Missing Adzuna credentials in environment variables');
+    throw new Error("Missing Adzuna credentials in environment variables");
   }
 
   const params = new URLSearchParams({
     app_id: appId,
     app_key: appKey,
     results_per_page: String(resultsPerPage),
-    'content-type': 'application/json',
+    "content-type": "application/json",
   });
 
-  if (search) params.append('what', search);
-  if (location) params.append('where', location);
-  if (location && Number.isFinite(radiusKm)) params.append('distance', String(radiusKm));
+  if (search) params.append("what", search);
+  if (location) params.append("where", location);
+  if (location && Number.isFinite(radiusKm))
+    params.append("distance", String(radiusKm));
 
   const response = await fetch(
-    `${ADZUNA_API_URL}/jobs/${ADZUNA_COUNTRY}/search/${page}?${params.toString()}`
+    `${ADZUNA_API_URL}/jobs/${ADZUNA_COUNTRY}/search/${page}?${params.toString()}`,
   );
 
   if (!response.ok) {
@@ -621,7 +883,7 @@ async function fetchAdzunaJobs({
 
 async function fetchAdzunaJobsForQueries({
   queries = [],
-  location = '',
+  location = "",
   radiusKm,
   page = 1,
   resultsPerPage = 50,
@@ -630,66 +892,211 @@ async function fetchAdzunaJobsForQueries({
 
   const settled = await Promise.allSettled(
     safeQueries.map((search) =>
-      fetchAdzunaJobs({ search, location, radiusKm, page, resultsPerPage })
-    )
+      fetchAdzunaJobs({ search, location, radiusKm, page, resultsPerPage }),
+    ),
   );
 
   return settled
-    .filter((result) => result.status === 'fulfilled')
+    .filter((result) => result.status === "fulfilled")
     .flatMap((result) => result.value);
 }
 
-async function fetchGreenhouseJobs({ search = '', location = '' } = {}) {
+async function fetchGreenhouseJobs({ search = "", location = "" } = {}) {
   if (GREENHOUSE_BOARDS.length === 0) return [];
 
   const responses = await Promise.all(
     GREENHOUSE_BOARDS.map(async (boardToken) => {
       const response = await fetch(
-        `https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`
+        `https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`,
       );
       if (!response.ok) return [];
       const data = await response.json();
       const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
       return jobs.map((job) => normalizeGreenhouseJob(job, boardToken, search));
-    })
+    }),
   );
 
   return responses.flat().filter((job) => {
     const haystack = getJobHaystack(job);
     const matchesSearch = matchesSearchText(search, haystack);
-    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
+    const matchesLocation =
+      !location || job.location.toLowerCase().includes(location.toLowerCase());
     return matchesSearch && matchesLocation;
   });
 }
 
-async function fetchLeverJobs({ search = '', location = '' } = {}) {
+async function fetchLeverJobs({ search = "", location = "" } = {}) {
   if (LEVER_BOARDS.length === 0) return [];
 
   const responses = await Promise.all(
     LEVER_BOARDS.map(async (site) => {
-      const response = await fetch(`https://api.lever.co/v0/postings/${site}?mode=json`);
+      const response = await fetch(
+        `https://api.lever.co/v0/postings/${site}?mode=json`,
+      );
       if (!response.ok) return [];
       const data = await response.json();
       const jobs = Array.isArray(data) ? data : [];
       return jobs.map((job) => normalizeLeverJob(job, site, search));
-    })
+    }),
   );
 
   return responses.flat().filter((job) => {
     const haystack = getJobHaystack(job);
     const matchesSearch = matchesSearchText(search, haystack);
-    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
+    const matchesLocation =
+      !location || job.location.toLowerCase().includes(location.toLowerCase());
     return matchesSearch && matchesLocation;
   });
 }
 
+function matchesAnySearchTerm(job, searchTerms = []) {
+  const terms = uniqueNonEmptyStrings(searchTerms, 6);
+  if (terms.length === 0) return true;
+  const haystack = getJobHaystack(job);
+  return terms.some((term) => matchesSearchText(term, haystack));
+}
+
+async function fetchMuseJobs({ searchTerms = [], location = "" } = {}) {
+  if (location) return [];
+
+  const rawJobs = await getOrLoadSource(
+    "muse:pages:1-4",
+    SOURCE_CACHE_TTL_MS.muse,
+    async () => {
+      const settled = await Promise.allSettled(
+        [1, 2, 3, 4].map(async (page) => {
+          const response = await fetch(
+            `https://www.themuse.com/api/public/jobs?page=${page}`,
+          );
+          if (!response.ok)
+            throw new Error(
+              `The Muse request failed with status ${response.status}`,
+            );
+          const data = await response.json();
+          return Array.isArray(data?.results) ? data.results : [];
+        }),
+      );
+
+      return settled
+        .filter((result) => result.status === "fulfilled")
+        .flatMap((result) => result.value);
+    },
+  );
+
+  const primaryQuery = searchTerms[0] || "";
+  return rawJobs
+    .map((job) => normalizeMuseJob(job, primaryQuery))
+    .filter((job) => matchesAnySearchTerm(job, searchTerms));
+}
+
+async function fetchRemotiveJobs({ searchTerms = [], location = "" } = {}) {
+  if (location) return [];
+
+  const rawJobs = await getOrLoadSource(
+    "remotive:all",
+    SOURCE_CACHE_TTL_MS.remotive,
+    async () => {
+      const response = await fetch("https://remotive.com/api/remote-jobs");
+      if (!response.ok)
+        throw new Error(
+          `Remotive request failed with status ${response.status}`,
+        );
+      const data = await response.json();
+      return Array.isArray(data?.jobs) ? data.jobs : [];
+    },
+  );
+
+  const primaryQuery = searchTerms[0] || "";
+  return rawJobs
+    .map((job) => normalizeRemotiveJob(job, primaryQuery))
+    .filter((job) => matchesAnySearchTerm(job, searchTerms));
+}
+
+async function fetchUsaJobs({
+  search = "",
+  location = "",
+  radiusMiles,
+  page = 1,
+} = {}) {
+  const apiKey = process.env.USAJOBS_API_KEY;
+  const email = process.env.USAJOBS_EMAIL;
+  if (!apiKey || !email) return [];
+
+  const params = new URLSearchParams({
+    ResultsPerPage: "50",
+    Page: String(page),
+    WhoMayApply: "public",
+    Fields: "Full",
+  });
+  if (search) params.append("Keyword", search);
+  if (location) params.append("LocationName", location);
+  if (location && Number.isFinite(radiusMiles))
+    params.append("Radius", String(radiusMiles));
+
+  const cacheKey = `usajobs:${params.toString()}`;
+  const data = await getOrLoadSource(
+    cacheKey,
+    SOURCE_CACHE_TTL_MS.usaJobs,
+    async () => {
+      const response = await fetch(
+        `https://data.usajobs.gov/api/search?${params.toString()}`,
+        {
+          headers: {
+            Host: "data.usajobs.gov",
+            "User-Agent": email,
+            "Authorization-Key": apiKey,
+          },
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          `USAJOBS request failed with status ${response.status}`,
+        );
+      return response.json();
+    },
+  );
+
+  const items = data?.SearchResult?.SearchResultItems;
+  return Array.isArray(items)
+    ? items.map((item) => normalizeUsaJobsJob(item, search))
+    : [];
+}
+
+async function fetchJoobleJobs({ search = "", location = "", page = 1 } = {}) {
+  const apiKey = process.env.JOOBLE_API_KEY;
+  if (!apiKey) return [];
+
+  const payload = { keywords: search, location, page: String(page) };
+  const cacheKey = `jooble:${JSON.stringify(payload).toLowerCase()}`;
+  const data = await getOrLoadSource(
+    cacheKey,
+    SOURCE_CACHE_TTL_MS.jooble,
+    async () => {
+      const response = await fetch(`https://jooble.org/api/${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok)
+        throw new Error(`Jooble request failed with status ${response.status}`);
+      return response.json();
+    },
+  );
+
+  return Array.isArray(data?.jobs)
+    ? data.jobs.map((job) => normalizeJoobleJob(job, search))
+    : [];
+}
+
 function mergeAndDedupeJobs(jobLists) {
-  const merged = jobLists.flat().filter((job) => job && job.title && job.company);
+  const merged = jobLists
+    .flat()
+    .filter((job) => job && job.title && job.company);
   const deduped = new Map();
 
   for (const job of merged) {
     const key = getJobDedupeKey(job);
-    if (!key || key === '-') continue;
+    if (!key || key === "-") continue;
 
     const existing = deduped.get(key);
 
@@ -718,16 +1125,20 @@ function mergeAndDedupeJobs(jobLists) {
   return Array.from(deduped.values());
 }
 
-function applyJobFilters(jobs, { search = '', location = '', filter = 'All' } = {}) {
+function applyJobFilters(
+  jobs,
+  { search = "", location = "", filter = "All" } = {},
+) {
   return jobs.filter((job) => {
     const haystack = getJobHaystack(job);
     const matchesSearch = matchesSearchText(search, haystack);
-    const matchesLocation = !location || job.location.toLowerCase().includes(location.toLowerCase());
+    const matchesLocation =
+      !location || job.location.toLowerCase().includes(location.toLowerCase());
 
     const matchesFilter =
-      filter === 'All' ||
-      (filter === 'Internship' && isInternshipJob(job)) ||
-      (filter === 'Remote' && isRemoteJob(job));
+      filter === "All" ||
+      (filter === "Internship" && isInternshipJob(job)) ||
+      (filter === "Remote" && isRemoteJob(job));
 
     return matchesSearch && matchesLocation && matchesFilter;
   });
@@ -737,13 +1148,13 @@ function removeSeniorLevelJobs(jobs) {
   return jobs.filter((job) => {
     const title = asCleanString(job.title).toLowerCase();
     return !(
-      title.includes('senior') ||
-      title.includes('sr.') ||
-      title.includes('manager') ||
-      title.includes('director') ||
-      title.includes('principal') ||
-      title.includes('lead ') ||
-      title.includes('chief')
+      title.includes("senior") ||
+      title.includes("sr.") ||
+      title.includes("manager") ||
+      title.includes("director") ||
+      title.includes("principal") ||
+      title.includes("lead ") ||
+      title.includes("chief")
     );
   });
 }
@@ -752,17 +1163,21 @@ async function fetchJobPool({
   searchTerms = [],
   careerPaths = [],
   jobKeywords = [],
-  location = '',
+  location = "",
   radiusKm,
-  filter = 'All',
+  filter = "All",
   page = 1,
 } = {}) {
-  const seeds = uniqueNonEmptyStrings([...searchTerms, ...careerPaths, ...jobKeywords], 10);
-  const baseSeeds = seeds.length > 0 ? seeds : ['internship', 'research assistant'];
+  const seeds = uniqueNonEmptyStrings(
+    [...searchTerms, ...careerPaths, ...jobKeywords],
+    10,
+  );
+  const baseSeeds =
+    seeds.length > 0 ? seeds : ["internship", "research assistant"];
 
   const searchQueries = uniqueNonEmptyStrings(
     baseSeeds.flatMap((term) => buildGenericSearchVariants(term, filter)),
-    12
+    12,
   );
 
   let adzunaRawJobs = await fetchAdzunaJobsForQueries({
@@ -773,10 +1188,10 @@ async function fetchJobPool({
     resultsPerPage: 35,
   });
 
-  if (adzunaRawJobs.length < 8 && filter !== 'All') {
+  if (adzunaRawJobs.length < 8 && filter !== "All") {
     const relaxedQueries = uniqueNonEmptyStrings(
-      baseSeeds.flatMap((term) => buildGenericSearchVariants(term, 'All')),
-      8
+      baseSeeds.flatMap((term) => buildGenericSearchVariants(term, "All")),
+      8,
     );
 
     const relaxedRawJobs = await fetchAdzunaJobsForQueries({
@@ -790,31 +1205,71 @@ async function fetchJobPool({
     adzunaRawJobs = [...adzunaRawJobs, ...relaxedRawJobs];
   }
 
-  const boardSearch = searchQueries[0] || baseSeeds[0] || 'intern';
+  const boardSearch = searchQueries[0] || baseSeeds[0] || "intern";
+  const sourceSearchTerms = uniqueNonEmptyStrings(
+    [...baseSeeds, ...searchQueries],
+    6,
+  );
+  const radiusMiles = Number.isFinite(radiusKm)
+    ? Math.round(radiusKm / 1.60934)
+    : undefined;
 
-  const [greenhouseJobs, leverJobs] = await Promise.all([
+  const sourceResults = await Promise.allSettled([
     fetchGreenhouseJobs({ search: boardSearch, location }),
     fetchLeverJobs({ search: boardSearch, location }),
+    fetchMuseJobs({ searchTerms: sourceSearchTerms, location }),
+    fetchRemotiveJobs({ searchTerms: sourceSearchTerms, location }),
+    fetchUsaJobs({ search: boardSearch, location, radiusMiles, page }),
+    fetchJoobleJobs({ search: boardSearch, location, page }),
   ]);
 
-  const adzunaJobs = adzunaRawJobs.map((job) => normalizeAdzunaJob(job, boardSearch));
-  const mergedJobs = mergeAndDedupeJobs([adzunaJobs, greenhouseJobs, leverJobs]);
-  const rankedJobs = rankJobs(mergedJobs, { searchTerms, careerPaths, jobKeywords });
+  const [
+    greenhouseJobs,
+    leverJobs,
+    museJobs,
+    remotiveJobs,
+    usaJobs,
+    joobleJobs,
+  ] = sourceResults.map((result) =>
+    result.status === "fulfilled" ? result.value : [],
+  );
+
+  const adzunaJobs = adzunaRawJobs.map((job) =>
+    normalizeAdzunaJob(job, boardSearch),
+  );
+  const mergedJobs = mergeAndDedupeJobs([
+    adzunaJobs,
+    greenhouseJobs,
+    leverJobs,
+    museJobs,
+    remotiveJobs,
+    usaJobs,
+    joobleJobs,
+  ]);
+  const rankedJobs = rankJobs(mergedJobs, {
+    searchTerms,
+    careerPaths,
+    jobKeywords,
+  });
 
   return {
     jobs: rankedJobs,
     searchQueries,
     totalFetched: mergedJobs.length,
+    sources: uniqueNonEmptyStrings(
+      mergedJobs.map((job) => job.source),
+      10,
+    ),
   };
 }
 
-app.get('/jobs/recommended', async (req, res) => {
+app.get("/jobs/recommended", async (req, res) => {
   try {
     const searchTermsParam = asCleanString(req.query.searchTerms);
     const careerPathsParam = asCleanString(req.query.careerPaths);
     const jobKeywordsParam = asCleanString(req.query.jobKeywords);
 
-    const cacheKey = getCacheKey('recommended', {
+    const cacheKey = getCacheKey("recommended", {
       searchTerms: searchTermsParam.toLowerCase(),
       careerPaths: careerPathsParam.toLowerCase(),
       jobKeywords: jobKeywordsParam.toLowerCase(),
@@ -824,15 +1279,30 @@ app.get('/jobs/recommended', async (req, res) => {
     if (cachedResponse) return res.json(cachedResponse);
 
     const rawSearchTerms = searchTermsParam
-      ? searchTermsParam.split(',').map((term) => term.trim()).filter(Boolean)
+      ? searchTermsParam
+          .split(",")
+          .map((term) => term.trim())
+          .filter(Boolean)
       : [];
 
     const careerPaths = careerPathsParam
-      ? uniqueNonEmptyStrings(careerPathsParam.split(',').map((term) => term.trim()).filter(Boolean), 5)
+      ? uniqueNonEmptyStrings(
+          careerPathsParam
+            .split(",")
+            .map((term) => term.trim())
+            .filter(Boolean),
+          5,
+        )
       : [];
 
     const jobKeywords = jobKeywordsParam
-      ? uniqueNonEmptyStrings(jobKeywordsParam.split(',').map((term) => term.trim()).filter(Boolean), 8)
+      ? uniqueNonEmptyStrings(
+          jobKeywordsParam
+            .split(",")
+            .map((term) => term.trim())
+            .filter(Boolean),
+          8,
+        )
       : [];
 
     const { searchTerms, primaryQuery } = buildRecommendedSearchInputs({
@@ -845,20 +1315,23 @@ app.get('/jobs/recommended', async (req, res) => {
       searchTerms,
       careerPaths,
       jobKeywords,
-      filter: 'All',
+      filter: "All",
       page: 1,
     });
 
-    const noSeniorJobs = removeSeniorLevelJobs(pool.jobs).filter((job) => job.applyUrl);
+    const noSeniorJobs = removeSeniorLevelJobs(pool.jobs).filter(
+      (job) => job.applyUrl,
+    );
     const internshipJobs = noSeniorJobs.filter(isInternshipJob);
 
-    const recommendedSource = internshipJobs.length >= 6 ? internshipJobs : noSeniorJobs;
+    const recommendedSource =
+      internshipJobs.length >= 6 ? internshipJobs : noSeniorJobs;
 
     const seenRecommendedCompanies = new Map();
 
     const recommendedJobs = recommendedSource
       .filter((job) => {
-        const company = normalizeForDedupe(job.company || 'unknown');
+        const company = normalizeForDedupe(job.company || "unknown");
         const count = seenRecommendedCompanies.get(company) || 0;
 
         if (count >= 2) return false;
@@ -880,33 +1353,37 @@ app.get('/jobs/recommended', async (req, res) => {
       primaryQuery,
       totalFetched: pool.totalFetched,
       searchQueries: pool.searchQueries,
+      sources: pool.sources,
     };
 
     setCachedValue(cacheKey, responsePayload);
     res.json(responsePayload);
   } catch (error) {
-    console.error('RECOMMENDED JOBS ERROR:', error);
+    console.error("RECOMMENDED JOBS ERROR:", error);
     res.status(500).json({
-      error: 'Failed to load recommended jobs',
-      details: error?.message || 'Unknown error',
+      error: "Failed to load recommended jobs",
+      details: error?.message || "Unknown error",
     });
   }
 });
 
-app.get('/jobs/search', async (req, res) => {
+app.get("/jobs/search", async (req, res) => {
   try {
     const query = asCleanString(req.query.query);
     const location = asCleanString(req.query.location);
-    const requestedRadiusMiles = Number.parseInt(asCleanString(req.query.radiusMiles, '25'), 10);
+    const requestedRadiusMiles = Number.parseInt(
+      asCleanString(req.query.radiusMiles, "25"),
+      10,
+    );
     const radiusMiles = [10, 25, 50, 100].includes(requestedRadiusMiles)
       ? requestedRadiusMiles
       : 25;
     const radiusKm = Math.round(radiusMiles * 1.60934);
-    const filter = asCleanString(req.query.filter, 'All');
-    const page = Number.parseInt(asCleanString(req.query.page, '1'), 10) || 1;
+    const filter = asCleanString(req.query.filter, "All");
+    const page = Number.parseInt(asCleanString(req.query.page, "1"), 10) || 1;
     const searchTermsParam = asCleanString(req.query.searchTerms);
 
-    const cacheKey = getCacheKey('search', {
+    const cacheKey = getCacheKey("search", {
       query: query.toLowerCase(),
       location: location.toLowerCase(),
       radiusMiles: location ? radiusMiles : null,
@@ -919,10 +1396,21 @@ app.get('/jobs/search', async (req, res) => {
     if (cachedResponse) return res.json(cachedResponse);
 
     const requestedSearchTerms = searchTermsParam
-      ? uniqueNonEmptyStrings(searchTermsParam.split(',').map((term) => term.trim()).filter(Boolean), 8)
+      ? uniqueNonEmptyStrings(
+          searchTermsParam
+            .split(",")
+            .map((term) => term.trim())
+            .filter(Boolean),
+          8,
+        )
       : [];
 
-    const baseSeedTerms = requestedSearchTerms.length > 0 ? requestedSearchTerms : query ? [query] : ['internship'];
+    const baseSeedTerms =
+      requestedSearchTerms.length > 0
+        ? requestedSearchTerms
+        : query
+          ? [query]
+          : ["internship"];
 
     const pool = await fetchJobPool({
       searchTerms: query ? [query, ...baseSeedTerms] : baseSeedTerms,
@@ -932,23 +1420,23 @@ app.get('/jobs/search', async (req, res) => {
       page,
     });
 
-    const relaxedSearch = query || '';
+    const relaxedSearch = query || "";
 
     let jobs = applyJobFilters(pool.jobs, {
       search: relaxedSearch,
-      location: '',
+      location: "",
       filter,
     });
 
-    if (jobs.length === 0 && filter !== 'All') {
+    if (jobs.length === 0 && filter !== "All") {
       jobs = applyJobFilters(pool.jobs, {
-        search: '',
-        location: '',
+        search: "",
+        location: "",
         filter,
       });
     }
 
-    if (filter === 'Remote' && jobs.length < 8) {
+    if (filter === "Remote" && jobs.length < 8) {
       const remotePool = await fetchJobPool({
         searchTerms: baseSeedTerms.flatMap((term) => [
           `remote ${term}`,
@@ -963,14 +1451,14 @@ app.get('/jobs/search', async (req, res) => {
         ]),
         location,
         radiusKm: location ? radiusKm : undefined,
-        filter: 'All',
+        filter: "All",
         page,
       });
 
       const additionalRemoteJobs = applyJobFilters(remotePool.jobs, {
-        search: '',
-        location: '',
-        filter: 'Remote',
+        search: "",
+        location: "",
+        filter: "Remote",
       });
 
       jobs = rankJobs(mergeAndDedupeJobs([jobs, additionalRemoteJobs]), {
@@ -987,26 +1475,27 @@ app.get('/jobs/search', async (req, res) => {
       radiusMiles: location ? radiusMiles : null,
       searchQueries: pool.searchQueries,
       totalFetched: pool.totalFetched,
+      sources: pool.sources,
     };
 
     setCachedValue(cacheKey, responsePayload);
     res.json(responsePayload);
   } catch (error) {
-    console.error('SEARCH JOBS ERROR:', error);
+    console.error("SEARCH JOBS ERROR:", error);
     res.status(500).json({
-      error: 'Failed to search jobs',
-      details: error?.message || 'Unknown error',
+      error: "Failed to search jobs",
+      details: error?.message || "Unknown error",
     });
   }
 });
 
-app.post('/analyze-resume', upload.single('resume'), async (req, res) => {
+app.post("/analyze-resume", upload.single("resume"), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'Resume PDF is required' });
+      return res.status(400).json({ error: "Resume PDF is required" });
     }
 
-    console.log('Uploaded file:', req.file.originalname);
+    console.log("Uploaded file:", req.file.originalname);
 
     const fileBuffer = fs.readFileSync(req.file.path);
 
@@ -1026,7 +1515,7 @@ app.post('/analyze-resume', upload.single('resume'), async (req, res) => {
 
     if (!resumeText) {
       return res.status(400).json({
-        error: 'Could not extract text from PDF',
+        error: "Could not extract text from PDF",
       });
     }
 
@@ -1182,43 +1671,46 @@ ${resumeText}
 `;
 
     const response = await client.responses.create({
-      model: 'gpt-5.4',
+      model: "gpt-5.4",
       input: prompt,
     });
 
     const rawText = response.output_text.trim();
-    console.log('OpenAI raw output:', rawText);
+    console.log("OpenAI raw output:", rawText);
 
     let parsed;
     try {
       parsed = JSON.parse(rawText);
       parsed = enrichResumeAnalysis(parsed, resumeText);
-      console.log('PARSED AI JSON:', JSON.stringify(parsed, null, 2));
+      console.log("PARSED AI JSON:", JSON.stringify(parsed, null, 2));
     } catch (parseError) {
-      console.error('JSON parse error:', parseError);
+      console.error("JSON parse error:", parseError);
       return res.status(500).json({
-        error: 'AI returned invalid JSON',
+        error: "AI returned invalid JSON",
         raw: rawText,
       });
     }
 
     const requiredSectionKeys = [
-      'overallImpression',
-      'contentAndRelevance',
-      'formattingAndVisualAppeal',
-      'languageAndProfessionalism',
+      "overallImpression",
+      "contentAndRelevance",
+      "formattingAndVisualAppeal",
+      "languageAndProfessionalism",
     ];
 
     if (parsed?.isResume === true) {
       const missingSections = requiredSectionKeys.filter((key) => {
         const section = parsed[key];
-        return !section || typeof section !== 'object';
+        return !section || typeof section !== "object";
       });
 
       if (missingSections.length > 0) {
-        console.error('AI response missing required sections:', missingSections);
+        console.error(
+          "AI response missing required sections:",
+          missingSections,
+        );
         return res.status(500).json({
-          error: 'AI response missing required resume sections',
+          error: "AI response missing required resume sections",
           missingSections,
           raw: parsed,
         });
@@ -1227,15 +1719,15 @@ ${resumeText}
 
     res.json(parsed);
   } catch (error) {
-    console.error('FULL SERVER ERROR:', error);
+    console.error("FULL SERVER ERROR:", error);
 
     if (req.file?.path && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
 
     res.status(500).json({
-      error: 'Failed to analyze resume',
-      details: error?.message || 'Unknown error',
+      error: "Failed to analyze resume",
+      details: error?.message || "Unknown error",
     });
   }
 });
