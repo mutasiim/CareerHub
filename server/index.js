@@ -13,10 +13,31 @@ dotenv.config();
 
 const app = express();
 
+app.set("trust proxy", 1);
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
 
-const upload = multer({ dest: "uploads/" });
+const MAX_RESUME_SIZE_BYTES = 10 * 1024 * 1024;
+const upload = multer({
+  dest: "uploads/",
+  limits: {
+    fileSize: MAX_RESUME_SIZE_BYTES,
+    files: 1,
+  },
+  fileFilter: (_req, file, callback) => {
+    const hasPdfName = file.originalname.toLowerCase().endsWith(".pdf");
+    const hasPdfMime = file.mimetype === "application/pdf";
+
+    if (!hasPdfName && !hasPdfMime) {
+      const error = new Error("Only PDF resume files are accepted.");
+      error.code = "INVALID_FILE_TYPE";
+      callback(error);
+      return;
+    }
+
+    callback(null, true);
+  },
+});
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -46,6 +67,78 @@ const SOURCE_CACHE_TTL_MS = {
   jooble: 1000 * 60 * 30,
   ats: 1000 * 60 * 60,
 };
+
+function createRateLimiter({ windowMs, maxRequests, message }) {
+  const clients = new Map();
+
+  return (req, res, next) => {
+    const now = Date.now();
+
+    if (clients.size >= 10_000) {
+      for (const [key, entry] of clients) {
+        if (now >= entry.resetAt) clients.delete(key);
+      }
+
+      while (clients.size >= 10_000) {
+        const oldestKey = clients.keys().next().value;
+        if (!oldestKey) break;
+        clients.delete(oldestKey);
+      }
+    }
+
+    const clientKey = req.ip || req.socket?.remoteAddress || "unknown";
+    const current = clients.get(clientKey);
+
+    if (!current || now >= current.resetAt) {
+      clients.set(clientKey, { count: 1, resetAt: now + windowMs });
+      res.setHeader("RateLimit-Limit", String(maxRequests));
+      res.setHeader("RateLimit-Remaining", String(maxRequests - 1));
+      return next();
+    }
+
+    if (current.count >= maxRequests) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((current.resetAt - now) / 1000),
+      );
+      res.setHeader("Retry-After", String(retryAfterSeconds));
+      res.setHeader("RateLimit-Limit", String(maxRequests));
+      res.setHeader("RateLimit-Remaining", "0");
+      return res.status(429).json({
+        error: message,
+        retryAfterSeconds,
+      });
+    }
+
+    current.count += 1;
+    res.setHeader("RateLimit-Limit", String(maxRequests));
+    res.setHeader(
+      "RateLimit-Remaining",
+      String(Math.max(0, maxRequests - current.count)),
+    );
+    return next();
+  };
+}
+
+const jobRequestLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 300,
+  message: "Too many job requests. Please wait a few minutes and try again.",
+});
+
+const resumeAnalysisLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 10,
+  message:
+    "Several resumes have been analyzed recently. Please wait a few minutes and try again.",
+});
+
+const matchAnalysisLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 40,
+  message:
+    "Several job matches have been analyzed recently. Please wait a few minutes and try again.",
+});
 
 function asCleanString(value, fallback = "") {
   return typeof value === "string" && value.trim().length > 0
@@ -1319,7 +1412,7 @@ async function fetchJobPool({
   };
 }
 
-app.get("/jobs/recommended", async (req, res) => {
+app.get("/jobs/recommended", jobRequestLimiter, async (req, res) => {
   try {
     const searchTermsParam = asCleanString(req.query.searchTerms);
     const careerPathsParam = asCleanString(req.query.careerPaths);
@@ -1423,7 +1516,7 @@ app.get("/jobs/recommended", async (req, res) => {
   }
 });
 
-app.get("/jobs/search", async (req, res) => {
+app.get("/jobs/search", jobRequestLimiter, async (req, res) => {
   try {
     const query = asCleanString(req.query.query);
     const location = asCleanString(req.query.location);
@@ -1545,7 +1638,7 @@ app.get("/jobs/search", async (req, res) => {
   }
 });
 
-app.post("/jobs/match-analysis", async (req, res) => {
+app.post("/jobs/match-analysis", matchAnalysisLimiter, async (req, res) => {
   try {
     const resumeSignals = {
       careerPaths: normalizeStringList(req.body?.resumeSignals?.careerPaths, {
@@ -1689,37 +1782,46 @@ ${JSON.stringify(job)}
   }
 });
 
-app.post("/analyze-resume", upload.single("resume"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "Resume PDF is required" });
-    }
+app.post(
+  "/analyze-resume",
+  resumeAnalysisLimiter,
+  upload.single("resume"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "Resume PDF is required" });
+      }
 
-    console.log("Uploaded file:", req.file.originalname);
+      const fileBuffer = fs.readFileSync(req.file.path);
 
-    const fileBuffer = fs.readFileSync(req.file.path);
+      if (fileBuffer.subarray(0, 5).toString("utf8") !== "%PDF-") {
+        fs.unlinkSync(req.file.path);
+        return res.status(400).json({
+          error: "The uploaded file is not a valid PDF.",
+        });
+      }
 
-    const parser = new PDFParse({
-      data: fileBuffer,
-      CanvasFactory,
-    });
-
-    const pdfTextResult = await parser.getText();
-    const resumeText = pdfTextResult.text?.trim();
-
-    await parser.destroy?.();
-
-    if (req.file?.path && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-
-    if (!resumeText) {
-      return res.status(400).json({
-        error: "Could not extract text from PDF",
+      const parser = new PDFParse({
+        data: fileBuffer,
+        CanvasFactory,
       });
-    }
 
-    const prompt = `
+      const pdfTextResult = await parser.getText();
+      const resumeText = pdfTextResult.text?.trim();
+
+      await parser.destroy?.();
+
+      if (req.file?.path && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+
+      if (!resumeText) {
+        return res.status(400).json({
+          error: "Could not extract text from PDF",
+        });
+      }
+
+      const prompt = `
 You are a professional resume reviewer and career peer advisor for a university career services office.
 Your feedback must follow the exact structure used by a career peer advisor when reviewing student resumes.
 
@@ -1870,66 +1972,91 @@ Uploaded text:
 ${resumeText}
 `;
 
-    const response = await client.responses.create({
-      model: "gpt-5.4",
-      input: prompt,
-    });
-
-    const rawText = response.output_text.trim();
-    console.log("OpenAI raw output:", rawText);
-
-    let parsed;
-    try {
-      parsed = JSON.parse(rawText);
-      parsed = enrichResumeAnalysis(parsed, resumeText);
-      console.log("PARSED AI JSON:", JSON.stringify(parsed, null, 2));
-    } catch (parseError) {
-      console.error("JSON parse error:", parseError);
-      return res.status(500).json({
-        error: "AI returned invalid JSON",
-        raw: rawText,
-      });
-    }
-
-    const requiredSectionKeys = [
-      "overallImpression",
-      "contentAndRelevance",
-      "formattingAndVisualAppeal",
-      "languageAndProfessionalism",
-    ];
-
-    if (parsed?.isResume === true) {
-      const missingSections = requiredSectionKeys.filter((key) => {
-        const section = parsed[key];
-        return !section || typeof section !== "object";
+      const response = await client.responses.create({
+        model: "gpt-5.4",
+        input: prompt,
       });
 
-      if (missingSections.length > 0) {
-        console.error(
-          "AI response missing required sections:",
-          missingSections,
-        );
+      const rawText = response.output_text.trim();
+      let parsed;
+      try {
+        parsed = JSON.parse(rawText);
+        parsed = enrichResumeAnalysis(parsed, resumeText);
+      } catch (parseError) {
+        console.error("JSON parse error:", parseError);
         return res.status(500).json({
-          error: "AI response missing required resume sections",
-          missingSections,
-          raw: parsed,
+          error: "AI returned invalid JSON",
+          raw: rawText,
         });
       }
+
+      const requiredSectionKeys = [
+        "overallImpression",
+        "contentAndRelevance",
+        "formattingAndVisualAppeal",
+        "languageAndProfessionalism",
+      ];
+
+      if (parsed?.isResume === true) {
+        const missingSections = requiredSectionKeys.filter((key) => {
+          const section = parsed[key];
+          return !section || typeof section !== "object";
+        });
+
+        if (missingSections.length > 0) {
+          console.error(
+            "AI response missing required sections:",
+            missingSections,
+          );
+          return res.status(500).json({
+            error: "AI response missing required resume sections",
+            missingSections,
+            raw: parsed,
+          });
+        }
+      }
+
+      res.json(parsed);
+    } catch (error) {
+      console.error("FULL SERVER ERROR:", error);
+
+      if (req.file?.path && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+
+      res.status(500).json({
+        error: "Failed to analyze resume",
+        details: error?.message || "Unknown error",
+      });
+    }
+  },
+);
+
+app.use((error, _req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({
+        error: "The resume PDF must be 10 MB or smaller.",
+      });
     }
 
-    res.json(parsed);
-  } catch (error) {
-    console.error("FULL SERVER ERROR:", error);
-
-    if (req.file?.path && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-
-    res.status(500).json({
-      error: "Failed to analyze resume",
-      details: error?.message || "Unknown error",
+    return res.status(400).json({
+      error: "The resume upload could not be processed.",
     });
   }
+
+  if (error?.code === "INVALID_FILE_TYPE") {
+    return res.status(400).json({ error: error.message });
+  }
+
+  return next(error);
+});
+
+app.use((error, _req, res, _next) => {
+  console.error("UNHANDLED SERVER ERROR:", error);
+  res.status(500).json({
+    error: "Something went wrong. Please try again shortly.",
+  });
 });
 
 const PORT = process.env.PORT || 3001;

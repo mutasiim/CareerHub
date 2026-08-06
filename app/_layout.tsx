@@ -63,6 +63,13 @@ export default function RootLayout() {
               />
 
               <Stack.Screen
+                name="privacy"
+                options={{
+                  headerShown: false,
+                }}
+              />
+
+              <Stack.Screen
                 name="modal"
                 options={{
                   headerShown: true,

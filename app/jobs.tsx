@@ -265,17 +265,24 @@ async function fetchJsonWithRetry(url: string, retries = 2): Promise<any> {
       }
 
       if (!response.ok) {
-        throw new Error(
+        const requestError = new Error(
           data?.error ||
             data?.details ||
             `Request failed with status ${response.status}`,
         );
+        (requestError as Error & { retryable?: boolean }).retryable =
+          response.status >= 500;
+        throw requestError;
       }
 
       return data;
     } catch (error: any) {
       lastError =
         error instanceof Error ? error : new Error("Unknown network error");
+
+      if ((error as Error & { retryable?: boolean })?.retryable === false) {
+        throw lastError;
+      }
 
       if (attempt < retries) {
         await new Promise((resolve) =>

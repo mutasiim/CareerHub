@@ -1,7 +1,7 @@
-import { Ionicons } from '@expo/vector-icons';
-import * as DocumentPicker from 'expo-document-picker';
-import { router } from 'expo-router';
-import React from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import * as DocumentPicker from "expo-document-picker";
+import { router } from "expo-router";
+import React from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -9,19 +9,20 @@ import {
   Text,
   TouchableOpacity,
   View,
-} from 'react-native';
+} from "react-native";
 
-import { useResume } from '@/context/ResumeContext';
+import { useResume } from "@/context/ResumeContext";
 
-const API_URL = 'https://careerhub-backend-xbe9.onrender.com';
+const API_URL = "https://careerhub-backend-xbe9.onrender.com";
 
 export default function ResumeScreen() {
-  const { fileName, setFileName, setFeedback, loading, setLoading } = useResume();
+  const { fileName, setFileName, setFeedback, loading, setLoading } =
+    useResume();
 
   const handleUpload = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf'],
+        type: ["application/pdf"],
         copyToCacheDirectory: true,
       });
 
@@ -32,31 +33,31 @@ export default function ResumeScreen() {
       setFileName(file.name);
       setLoading(true);
       setFeedback(null);
-      router.push('/analyzing');
+      router.push("/analyzing");
 
       const formData = new FormData();
-      formData.append('resume', {
+      formData.append("resume", {
         uri: file.uri,
         name: file.name,
-        type: file.mimeType || 'application/pdf',
+        type: file.mimeType || "application/pdf",
       } as any);
 
       const response = await fetch(`${API_URL}/analyze-resume`, {
-        method: 'POST',
+        method: "POST",
         body: formData,
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to analyze resume');
+        throw new Error(data.error || "Failed to analyze resume");
       }
 
       setFeedback(data);
-      router.replace('/feedback');
+      router.replace("/feedback");
     } catch (error: any) {
-      console.error('ERROR:', error);
-      Alert.alert('Error', error?.message || 'Upload failed');
+      console.error("ERROR:", error);
+      Alert.alert("Error", error?.message || "Upload failed");
     } finally {
       setLoading(false);
     }
@@ -71,7 +72,8 @@ export default function ResumeScreen() {
         <Text style={styles.eyebrow}>CareerHub</Text>
         <Text style={styles.title}>Upload your resume</Text>
         <Text style={styles.subtitle}>
-          Get detailed AI-powered feedback, scoring, and actionable improvements in seconds.
+          Get detailed AI-powered feedback, scoring, and actionable improvements
+          in seconds.
         </Text>
 
         <View style={styles.uploadCard}>
@@ -80,11 +82,12 @@ export default function ResumeScreen() {
           </View>
 
           <Text style={styles.cardTitle}>
-            {fileName ? 'Resume ready to analyze' : 'Drop in your resume'}
+            {fileName ? "Resume ready to analyze" : "Drop in your resume"}
           </Text>
 
           <Text style={styles.cardText}>
-            Upload a PDF resume and get a full review with score breakdown, strengths, and recommendations.
+            Upload a PDF resume and get a full review with score breakdown,
+            strengths, and recommendations.
           </Text>
 
           {fileName ? (
@@ -102,7 +105,9 @@ export default function ResumeScreen() {
           ) : (
             <View style={styles.emptyHint}>
               <Ionicons name="document-outline" size={18} color="#94a3b8" />
-              <Text style={styles.emptyHintText}>Supported format: PDF only</Text>
+              <Text style={styles.emptyHintText}>
+                Supported format: PDF only
+              </Text>
             </View>
           )}
 
@@ -120,19 +125,33 @@ export default function ResumeScreen() {
             ) : (
               <View style={styles.buttonRow}>
                 <Ionicons
-                  name={fileName ? 'refresh-outline' : 'arrow-up-circle-outline'}
+                  name={
+                    fileName ? "refresh-outline" : "arrow-up-circle-outline"
+                  }
                   size={20}
                   color="#ffffff"
                 />
                 <Text style={styles.buttonText}>
-                  {fileName ? 'Upload another resume' : 'Choose resume PDF'}
+                  {fileName ? "Upload another resume" : "Choose resume PDF"}
                 </Text>
               </View>
             )}
           </TouchableOpacity>
 
           <Text style={styles.bottomHint}>
-            Your feedback will include a score, breakdown, and personalized improvement suggestions.
+            Your feedback will include a score, breakdown, and personalized
+            improvement suggestions.
+          </Text>
+
+          <Text style={styles.privacyNotice}>
+            By choosing a resume, you agree to CareerHub processing its content
+            to provide AI-powered feedback.{" "}
+            <Text
+              style={styles.privacyLink}
+              onPress={() => router.push("/privacy")}
+            >
+              Privacy & Data Use
+            </Text>
           </Text>
         </View>
       </View>
@@ -143,7 +162,7 @@ export default function ResumeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'rgba(59,130,246,0.12)'
+    backgroundColor: "rgba(59,130,246,0.12)",
   },
   content: {
     flex: 1,
@@ -152,145 +171,157 @@ const styles = StyleSheet.create({
     paddingBottom: 30,
   },
   glowOne: {
-    position: 'absolute',
+    position: "absolute",
     top: 80,
     right: -40,
     width: 180,
     height: 180,
     borderRadius: 90,
-    backgroundColor: 'rgba(59,130,246,0.12)',
+    backgroundColor: "rgba(59,130,246,0.12)",
   },
   glowTwo: {
-    position: 'absolute',
+    position: "absolute",
     bottom: 120,
     left: -50,
     width: 220,
     height: 220,
     borderRadius: 110,
-    backgroundColor: 'rgba(29,78,216,0.10)',
+    backgroundColor: "rgba(29,78,216,0.10)",
   },
   eyebrow: {
-    color: '#60a5fa',
+    color: "#60a5fa",
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: "700",
     letterSpacing: 1,
-    textTransform: 'uppercase',
+    textTransform: "uppercase",
     marginBottom: 10,
   },
   title: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 34,
-    fontWeight: '800',
+    fontWeight: "800",
     lineHeight: 40,
     marginBottom: 12,
   },
   subtitle: {
-    color: '#cbd5e1',
+    color: "#cbd5e1",
     fontSize: 16,
     lineHeight: 26,
     marginBottom: 28,
   },
   uploadCard: {
-    backgroundColor: 'rgba(30,41,59,0.95)',
+    backgroundColor: "rgba(30,41,59,0.95)",
     borderRadius: 28,
     padding: 22,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: "rgba(255,255,255,0.08)",
   },
   iconWrap: {
     width: 68,
     height: 68,
     borderRadius: 20,
-    backgroundColor: 'rgba(59,130,246,0.22)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "rgba(59,130,246,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 18,
   },
   cardTitle: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 24,
-    fontWeight: '700',
+    fontWeight: "700",
     marginBottom: 10,
   },
   cardText: {
-    color: '#cbd5e1',
+    color: "#cbd5e1",
     fontSize: 15,
     lineHeight: 24,
     marginBottom: 20,
   },
   emptyHint: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     marginBottom: 22,
   },
   emptyHintText: {
-    color: '#94a3b8',
+    color: "#94a3b8",
     fontSize: 14,
     marginLeft: 8,
   },
   filePreview: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15,23,42,0.8)',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(15,23,42,0.8)",
     borderRadius: 18,
     padding: 14,
     marginBottom: 22,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: "rgba(255,255,255,0.06)",
   },
   fileIconBox: {
     width: 44,
     height: 44,
     borderRadius: 14,
-    backgroundColor: 'rgba(59,130,246,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "rgba(59,130,246,0.15)",
+    alignItems: "center",
+    justifyContent: "center",
     marginRight: 12,
   },
   fileTextWrap: {
     flex: 1,
   },
   fileName: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: "600",
     marginBottom: 4,
   },
   fileMeta: {
-    color: '#94a3b8',
+    color: "#94a3b8",
     fontSize: 13,
   },
   button: {
-    backgroundColor: '#2563eb',
+    backgroundColor: "#2563eb",
     paddingVertical: 16,
     paddingHorizontal: 18,
     borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 16,
   },
   buttonDisabled: {
     opacity: 0.85,
   },
   buttonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   buttonLoadingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
   },
   buttonText: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   bottomHint: {
-    color: '#94a3b8',
+    color: "#94a3b8",
     fontSize: 13,
     lineHeight: 20,
-    textAlign: 'center',
+    textAlign: "center",
+  },
+  privacyNotice: {
+    color: "#64748b",
+    fontSize: 11,
+    lineHeight: 17,
+    textAlign: "center",
+    marginTop: 12,
+  },
+  privacyLink: {
+    color: "#60a5fa",
+    fontWeight: "700",
+    textDecorationLine: "underline",
   },
 });
