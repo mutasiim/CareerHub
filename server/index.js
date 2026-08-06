@@ -322,7 +322,7 @@ function normalizeGreenhouseJob(job, boardToken, searchQuery = "") {
         .filter(Boolean)
         .join(" ")
     : "";
-  const description = asCleanString(job?.content || metadataText);
+  const description = stripHtml(job?.content || metadataText);
   const type = inferJobType({ title, description, location });
   const haystack =
     `${title} ${company} ${location} ${type} ${metadataText} ${description}`.toLowerCase();
@@ -351,7 +351,7 @@ function normalizeLeverJob(job, site, searchQuery = "") {
     job?.categories?.location,
     "Location not specified",
   );
-  const description = asCleanString(job?.descriptionPlain || job?.description);
+  const description = stripHtml(job?.descriptionPlain || job?.description);
   const rawType = asCleanString(job?.categories?.commitment);
   const type = rawType || inferJobType({ title, description, location });
   const haystack =

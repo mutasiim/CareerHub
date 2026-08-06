@@ -20,10 +20,11 @@ export type SavedJob = {
   salaryMax?: number;
   salaryText?: string;
   source?: string;
+  description?: string;
   savedAt: string;
 };
 
-type SavableJob = Omit<SavedJob, "savedAt">;
+export type SavableJob = Omit<SavedJob, "savedAt">;
 
 type SavedJobsContextType = {
   savedJobs: SavedJob[];

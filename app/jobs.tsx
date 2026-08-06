@@ -1,12 +1,11 @@
 import { useResume } from "@/context/ResumeContext";
+import { useJobDetails } from "@/context/JobDetailsContext";
 import { useSavedJobs } from "@/context/SavedJobsContext";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useNavigation } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -42,6 +41,7 @@ type JobOpening = {
   salaryMax?: number;
   salaryText?: string;
   source?: string;
+  description?: string;
 };
 
 function asString(value: unknown, fallback = ""): string {
@@ -104,6 +104,7 @@ function normalizeJob(job: any): JobOpening {
           : undefined,
     salaryText: asString(job?.salaryText || job?.salary_text) || undefined,
     source: asString(job?.source) || undefined,
+    description: asString(job?.description) || undefined,
   };
 }
 
@@ -293,6 +294,7 @@ async function fetchJsonWithRetry(url: string, retries = 2): Promise<any> {
 export default function JobsScreen() {
   const navigation = useNavigation();
   const { feedback, resumeRefreshKey } = useResume();
+  const { selectJob } = useJobDetails();
   const {
     savedJobs,
     hydrated: savedJobsHydrated,
@@ -750,27 +752,9 @@ export default function JobsScreen() {
     selectedFilter !== "All" ||
     sortOption !== "Relevance";
 
-  const handleViewJob = async (job: JobOpening) => {
-    if (!job.applyUrl) {
-      Alert.alert(
-        "Job link unavailable",
-        "This opening does not have an application link yet.",
-      );
-      return;
-    }
-
-    try {
-      const supported = await Linking.canOpenURL(job.applyUrl);
-      if (!supported) {
-        throw new Error("Unsupported URL");
-      }
-      await Linking.openURL(job.applyUrl);
-    } catch {
-      Alert.alert(
-        "Unable to open job",
-        "There was a problem opening this job link.",
-      );
-    }
+  const handleViewJob = (job: JobOpening) => {
+    selectJob(job);
+    router.push("/job-details");
   };
 
   const resetBrowseFilters = () => {
