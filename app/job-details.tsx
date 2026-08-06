@@ -13,6 +13,7 @@ import {
   Share,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -20,7 +21,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 const API_URL = "https://careerhub-backend-xbe9.onrender.com";
 
 type MatchAnalysis = {
-  matchScore: number;
+  matchScore: number | null;
+  assessmentType: "Complete" | "Preliminary";
   confidence: "High" | "Moderate" | "Limited";
   summary: string;
   matchingStrengths: string[];
@@ -79,6 +81,7 @@ export default function JobDetailsScreen() {
   );
   const [matchLoading, setMatchLoading] = useState(false);
   const [matchError, setMatchError] = useState<string | null>(null);
+  const [pastedDescription, setPastedDescription] = useState("");
 
   if (!selectedJob) {
     return (
@@ -111,6 +114,13 @@ export default function JobDetailsScreen() {
     /^(?:\.{3}|…)|(?:\.{3}|…)$/.test(description);
   const canExpandDescription =
     !sourceOnlyProvidedPreview && description.length > 300;
+  const pastedFullDescription = pastedDescription.trim();
+  const hasPastedFullDescription = pastedFullDescription.length >= 300;
+  const comparisonDescription = hasPastedFullDescription
+    ? pastedFullDescription
+    : description;
+  const comparisonIsPreviewOnly =
+    sourceOnlyProvidedPreview && !hasPastedFullDescription;
   const resumeSignals =
     feedback?.isResume === true
       ? {
@@ -126,7 +136,7 @@ export default function JobDetailsScreen() {
       return;
     }
 
-    if (!description) {
+    if (!comparisonDescription) {
       setMatchError(
         "This source did not provide enough job information to compare.",
       );
@@ -150,9 +160,9 @@ export default function JobDetailsScreen() {
             company: selectedJob.company,
             location: selectedJob.location,
             type: selectedJob.type,
-            description,
+            description: comparisonDescription,
             source: selectedJob.source,
-            isPreviewOnly: sourceOnlyProvidedPreview,
+            isPreviewOnly: comparisonIsPreviewOnly,
           },
         }),
       });
@@ -289,6 +299,55 @@ export default function JobDetailsScreen() {
                 applying.
               </Text>
 
+              {sourceOnlyProvidedPreview ? (
+                <View style={styles.fullDescriptionInputCard}>
+                  <View style={styles.fullDescriptionInputHeader}>
+                    <Ionicons
+                      name="clipboard-outline"
+                      size={19}
+                      color="#a5b4fc"
+                    />
+                    <View style={styles.fullDescriptionInputCopy}>
+                      <Text style={styles.fullDescriptionInputTitle}>
+                        Want the complete comparison?
+                      </Text>
+                      <Text style={styles.fullDescriptionInputHint}>
+                        Copy the full description from the original posting and
+                        paste it below.
+                      </Text>
+                    </View>
+                  </View>
+                  <TextInput
+                    value={pastedDescription}
+                    onChangeText={setPastedDescription}
+                    placeholder="Paste the complete job description here..."
+                    placeholderTextColor="#64748b"
+                    style={styles.fullDescriptionInput}
+                    multiline
+                    textAlignVertical="top"
+                  />
+                  <View style={styles.inputStatusRow}>
+                    <Text
+                      style={[
+                        styles.inputStatusText,
+                        hasPastedFullDescription && styles.inputStatusReady,
+                      ]}
+                    >
+                      {hasPastedFullDescription
+                        ? "Full comparison ready"
+                        : pastedDescription.length > 0
+                          ? "Keep pasting the complete posting"
+                          : "Optional — otherwise CareerHub will run a preliminary check"}
+                    </Text>
+                    {pastedDescription.length > 0 ? (
+                      <Pressable onPress={() => setPastedDescription("")}>
+                        <Text style={styles.clearInputText}>Clear</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              ) : null}
+
               {matchError ? (
                 <View style={styles.matchErrorBox}>
                   <Ionicons
@@ -316,7 +375,9 @@ export default function JobDetailsScreen() {
                 <Text style={styles.analyzeButtonText}>
                   {matchLoading
                     ? "Analyzing this match..."
-                    : "Analyze this match"}
+                    : comparisonIsPreviewOnly
+                      ? "Run preliminary match"
+                      : "Analyze full match"}
                 </Text>
               </Pressable>
 
@@ -328,14 +389,28 @@ export default function JobDetailsScreen() {
           ) : (
             <View style={styles.analysisResults}>
               <View style={styles.scoreRow}>
-                <View style={styles.scoreCircle}>
-                  <Text style={styles.scoreNumber}>
-                    {matchAnalysis.matchScore}
-                  </Text>
-                  <Text style={styles.scoreOutOf}>/100</Text>
-                </View>
+                {matchAnalysis.matchScore !== null ? (
+                  <View style={styles.scoreCircle}>
+                    <Text style={styles.scoreNumber}>
+                      {matchAnalysis.matchScore}
+                    </Text>
+                    <Text style={styles.scoreOutOf}>/100</Text>
+                  </View>
+                ) : (
+                  <View style={styles.preliminaryCircle}>
+                    <Ionicons
+                      name="document-outline"
+                      size={27}
+                      color="#fbbf24"
+                    />
+                  </View>
+                )}
                 <View style={styles.scoreCopy}>
-                  <Text style={styles.scoreLabel}>Resume alignment</Text>
+                  <Text style={styles.scoreLabel}>
+                    {matchAnalysis.assessmentType === "Preliminary"
+                      ? "Preliminary match"
+                      : "Resume alignment"}
+                  </Text>
                   <View style={styles.confidenceBadge}>
                     <Text style={styles.confidenceText}>
                       {matchAnalysis.confidence} confidence
@@ -415,7 +490,7 @@ export default function JobDetailsScreen() {
                 </View>
               ) : null}
 
-              {sourceOnlyProvidedPreview ? (
+              {matchAnalysis.assessmentType === "Preliminary" ? (
                 <Text style={styles.limitedNotice}>
                   This score uses a partial job description. Review the complete
                   posting before applying.
@@ -635,6 +710,60 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     marginTop: 17,
   },
+  fullDescriptionInputCard: {
+    backgroundColor: "rgba(15,23,42,0.65)",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(129,140,248,0.22)",
+    padding: 13,
+    marginTop: 15,
+  },
+  fullDescriptionInputHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+    marginBottom: 11,
+  },
+  fullDescriptionInputCopy: { flex: 1 },
+  fullDescriptionInputTitle: {
+    color: "#e0e7ff",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  fullDescriptionInputHint: {
+    color: "#94a3b8",
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 3,
+  },
+  fullDescriptionInput: {
+    minHeight: 116,
+    maxHeight: 210,
+    borderRadius: 11,
+    backgroundColor: "#0f172a",
+    borderWidth: 1,
+    borderColor: "#2f3c54",
+    color: "#e2e8f0",
+    fontSize: 13,
+    lineHeight: 19,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  inputStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 8,
+  },
+  inputStatusText: {
+    color: "#64748b",
+    fontSize: 10,
+    lineHeight: 14,
+    flex: 1,
+  },
+  inputStatusReady: { color: "#6ee7b7" },
+  clearInputText: { color: "#a5b4fc", fontSize: 11, fontWeight: "800" },
   analyzeButton: {
     minHeight: 50,
     borderRadius: 13,
@@ -681,6 +810,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
+  },
+  preliminaryCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 3,
+    borderColor: "rgba(251,191,36,0.55)",
+    backgroundColor: "rgba(120,53,15,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   scoreNumber: { color: "#ffffff", fontSize: 24, fontWeight: "900" },
   scoreOutOf: {

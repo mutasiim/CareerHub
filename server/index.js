@@ -1603,7 +1603,8 @@ Compare the resume analysis signals with the job posting below.
 
 Return ONLY valid JSON in exactly this shape:
 {
-  "matchScore": number,
+  "matchScore": number | null,
+  "assessmentType": "Complete" | "Preliminary",
   "confidence": "High" | "Moderate" | "Limited",
   "summary": "string",
   "matchingStrengths": ["string", "string", "string"],
@@ -1619,8 +1620,8 @@ STRICT ACCURACY RULES:
 - matchingStrengths must contain 1 to 4 concise, evidence-based strengths.
 - notMentioned must contain 0 to 4 important requirements from the job that are not present in the resume signals.
 - beforeApplying must contain exactly 3 specific, practical actions.
-- matchScore must be an integer from 0 to 100 and must not be inflated.
-- If the posting is preview-only, confidence must be "Limited" and the summary must acknowledge that the comparison uses a partial description.
+- For a complete posting, matchScore must be an integer from 0 to 100 and must not be inflated, and assessmentType must be "Complete".
+- If the posting is preview-only, matchScore must be null, assessmentType must be "Preliminary", confidence must be "Limited", and the summary must acknowledge that the comparison uses a partial description.
 - Otherwise, confidence may be High or Moderate depending on the evidence.
 - Keep the summary and experienceAlignment to no more than 2 sentences each.
 - Do not use markdown and do not include text outside the JSON.
@@ -1644,14 +1645,17 @@ ${JSON.stringify(job)}
     const parsed = JSON.parse(rawText);
 
     const analysis = {
-      matchScore: Math.max(
-        0,
-        Math.min(100, Math.round(Number(parsed?.matchScore) || 0)),
-      ),
-      confidence: ["High", "Moderate", "Limited"].includes(parsed?.confidence)
-        ? parsed.confidence
-        : job.isPreviewOnly
-          ? "Limited"
+      matchScore: job.isPreviewOnly
+        ? null
+        : Math.max(
+            0,
+            Math.min(100, Math.round(Number(parsed?.matchScore) || 0)),
+          ),
+      assessmentType: job.isPreviewOnly ? "Preliminary" : "Complete",
+      confidence: job.isPreviewOnly
+        ? "Limited"
+        : ["High", "Moderate"].includes(parsed?.confidence)
+          ? parsed.confidence
           : "Moderate",
       summary: asCleanString(
         parsed?.summary,
