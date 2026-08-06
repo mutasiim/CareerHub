@@ -41,6 +41,7 @@ const SOURCE_CACHE_TTL_MS = {
   remotive: 1000 * 60 * 60 * 6,
   usaJobs: 1000 * 60 * 30,
   jooble: 1000 * 60 * 30,
+  ats: 1000 * 60 * 60,
 };
 
 function asCleanString(value, fallback = "") {
@@ -906,12 +907,18 @@ async function fetchGreenhouseJobs({ search = "", location = "" } = {}) {
 
   const responses = await Promise.all(
     GREENHOUSE_BOARDS.map(async (boardToken) => {
-      const response = await fetch(
-        `https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`,
+      const jobs = await getOrLoadSource(
+        `greenhouse:${boardToken}`,
+        SOURCE_CACHE_TTL_MS.ats,
+        async () => {
+          const response = await fetch(
+            `https://boards-api.greenhouse.io/v1/boards/${boardToken}/jobs?content=true`,
+          );
+          if (!response.ok) return [];
+          const data = await response.json();
+          return Array.isArray(data?.jobs) ? data.jobs : [];
+        },
       );
-      if (!response.ok) return [];
-      const data = await response.json();
-      const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
       return jobs.map((job) => normalizeGreenhouseJob(job, boardToken, search));
     }),
   );
@@ -930,12 +937,18 @@ async function fetchLeverJobs({ search = "", location = "" } = {}) {
 
   const responses = await Promise.all(
     LEVER_BOARDS.map(async (site) => {
-      const response = await fetch(
-        `https://api.lever.co/v0/postings/${site}?mode=json`,
+      const jobs = await getOrLoadSource(
+        `lever:${site}`,
+        SOURCE_CACHE_TTL_MS.ats,
+        async () => {
+          const response = await fetch(
+            `https://api.lever.co/v0/postings/${site}?mode=json`,
+          );
+          if (!response.ok) return [];
+          const data = await response.json();
+          return Array.isArray(data) ? data : [];
+        },
       );
-      if (!response.ok) return [];
-      const data = await response.json();
-      const jobs = Array.isArray(data) ? data : [];
       return jobs.map((job) => normalizeLeverJob(job, site, search));
     }),
   );
