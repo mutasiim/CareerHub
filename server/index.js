@@ -351,7 +351,17 @@ function normalizeLeverJob(job, site, searchQuery = "") {
     job?.categories?.location,
     "Location not specified",
   );
-  const description = stripHtml(job?.descriptionPlain || job?.description);
+  const leverDescriptionParts = [
+    job?.description || job?.descriptionPlain,
+    ...(Array.isArray(job?.lists)
+      ? job.lists.map(
+          (section) =>
+            `<h3>${asCleanString(section?.text)}</h3>${asCleanString(section?.content)}`,
+        )
+      : []),
+    job?.additional || job?.additionalPlain,
+  ].filter(Boolean);
+  const description = stripHtml(leverDescriptionParts.join("\n"));
   const rawType = asCleanString(job?.categories?.commitment);
   const type = rawType || inferJobType({ title, description, location });
   const haystack =
@@ -375,12 +385,21 @@ function normalizeLeverJob(job, site, searchQuery = "") {
 
 function stripHtml(value = "") {
   return asCleanString(value)
-    .replace(/<[^>]*>/g, " ")
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "\n• ")
+    .replace(/<\/li>/gi, "")
+    .replace(/<\/(?:p|div|section|article|h[1-6]|ul|ol)>/gi, "\n\n")
+    .replace(/<(?:p|div|section|article|h[1-6]|ul|ol)\b[^>]*>/gi, "")
+    .replace(/<[^>]*>/g, "")
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 

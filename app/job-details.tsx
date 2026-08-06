@@ -2,7 +2,7 @@ import { useJobDetails } from "@/context/JobDetailsContext";
 import { useSavedJobs } from "@/context/SavedJobsContext";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React from "react";
+import React, { useState } from "react";
 import {
   Alert,
   Linking,
@@ -58,6 +58,7 @@ function formatSalary({
 export default function JobDetailsScreen() {
   const { selectedJob } = useJobDetails();
   const { isJobSaved, toggleSavedJob } = useSavedJobs();
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   if (!selectedJob) {
     return (
@@ -84,6 +85,12 @@ export default function JobDetailsScreen() {
   const saved = isJobSaved(selectedJob);
   const postedDate = formatPostedDate(selectedJob.createdAt);
   const salary = formatSalary(selectedJob);
+  const description = selectedJob.description?.trim() || "";
+  const sourceOnlyProvidedPreview =
+    selectedJob.source?.toLowerCase() === "jooble" ||
+    /^(?:\.{3}|…)|(?:\.{3}|…)$/.test(description);
+  const canExpandDescription =
+    !sourceOnlyProvidedPreview && description.length > 300;
 
   const handleShare = async () => {
     const details = [
@@ -180,11 +187,58 @@ export default function JobDetailsScreen() {
         ) : null}
 
         <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>About this role</Text>
-          <Text style={styles.description}>
-            {selectedJob.description ||
-              "The job source did not provide a full description. Use the application button below to review the complete posting on the original website."}
+          <View style={styles.sectionHeadingRow}>
+            <View style={styles.sectionIcon}>
+              <Ionicons
+                name="document-text-outline"
+                size={20}
+                color="#60a5fa"
+              />
+            </View>
+            <View style={styles.sectionHeadingCopy}>
+              <Text style={styles.sectionTitle}>Job description</Text>
+              <Text style={styles.sectionSubtitle}>
+                {sourceOnlyProvidedPreview
+                  ? `Preview provided by ${selectedJob.source || "the job source"}`
+                  : "Full details provided by the job source"}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.descriptionDivider} />
+
+          <Text
+            style={styles.description}
+            numberOfLines={
+              canExpandDescription && !descriptionExpanded ? 10 : undefined
+            }
+          >
+            {description ||
+              "The job source did not provide a description for this opening."}
           </Text>
+
+          {canExpandDescription ? (
+            <Pressable
+              style={styles.descriptionAction}
+              onPress={() => setDescriptionExpanded((current) => !current)}
+            >
+              <Text style={styles.descriptionActionText}>
+                {descriptionExpanded ? "Show less" : "Read full description"}
+              </Text>
+              <Ionicons
+                name={descriptionExpanded ? "chevron-up" : "chevron-down"}
+                size={18}
+                color="#60a5fa"
+              />
+            </Pressable>
+          ) : sourceOnlyProvidedPreview || !description ? (
+            <Pressable style={styles.descriptionAction} onPress={handleApply}>
+              <Text style={styles.descriptionActionText}>
+                View complete posting
+              </Text>
+              <Ionicons name="open-outline" size={18} color="#60a5fa" />
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={styles.actionRow}>
@@ -247,7 +301,6 @@ const styles = StyleSheet.create({
     borderRadius: 23,
     backgroundColor: "#1e293b",
     borderWidth: 1,
-    borderColor: "#334155",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -328,9 +381,40 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 19,
     fontWeight: "800",
-    marginBottom: 13,
   },
-  description: { color: "#cbd5e1", fontSize: 15, lineHeight: 24 },
+  sectionHeadingRow: { flexDirection: "row", alignItems: "center" },
+  sectionHeadingCopy: { flex: 1 },
+  sectionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    backgroundColor: "rgba(59,130,246,0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  sectionSubtitle: { color: "#94a3b8", fontSize: 12, marginTop: 3 },
+  descriptionDivider: {
+    height: 1,
+    backgroundColor: "rgba(148,163,184,0.14)",
+    marginVertical: 17,
+  },
+  description: { color: "#d7dfeb", fontSize: 15, lineHeight: 24 },
+  descriptionAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: "rgba(59,130,246,0.1)",
+    marginTop: 17,
+  },
+  descriptionActionText: {
+    color: "#60a5fa",
+    fontSize: 14,
+    fontWeight: "800",
+  },
   actionRow: { flexDirection: "row", gap: 12, marginBottom: 12 },
   secondaryButton: {
     flex: 1,
