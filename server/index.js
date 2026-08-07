@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import dotenv from "dotenv";
 import express from "express";
 import fs from "fs";
+import mammoth from "mammoth";
 import multer from "multer";
 import OpenAI from "openai";
 
@@ -25,11 +26,17 @@ const upload = multer({
     files: 1,
   },
   fileFilter: (_req, file, callback) => {
-    const hasPdfName = file.originalname.toLowerCase().endsWith(".pdf");
-    const hasPdfMime = file.mimetype === "application/pdf";
+    const lowerName = file.originalname.toLowerCase();
+    const hasAllowedExtension =
+      lowerName.endsWith(".pdf") || lowerName.endsWith(".docx");
+    const hasAllowedMime = [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/octet-stream",
+    ].includes(file.mimetype);
 
-    if (!hasPdfName && !hasPdfMime) {
-      const error = new Error("Only PDF resume files are accepted.");
+    if (!hasAllowedExtension || !hasAllowedMime) {
+      const error = new Error("Only PDF and DOCX resume files are accepted.");
       error.code = "INVALID_FILE_TYPE";
       callback(error);
       return;
@@ -1789,27 +1796,63 @@ app.post(
   async (req, res) => {
     try {
       if (!req.file) {
-        return res.status(400).json({ error: "Resume PDF is required" });
+        return res
+          .status(400)
+          .json({ error: "A PDF or DOCX resume is required" });
       }
 
       const fileBuffer = fs.readFileSync(req.file.path);
+      const isPdf = req.file.originalname.toLowerCase().endsWith(".pdf");
+      const isDocx = req.file.originalname.toLowerCase().endsWith(".docx");
+      let resumeText = "";
 
-      if (fileBuffer.subarray(0, 5).toString("utf8") !== "%PDF-") {
-        fs.unlinkSync(req.file.path);
-        return res.status(400).json({
-          error: "The uploaded file is not a valid PDF.",
+      if (isPdf) {
+        if (fileBuffer.subarray(0, 5).toString("utf8") !== "%PDF-") {
+          fs.unlinkSync(req.file.path);
+          return res.status(400).json({
+            error: "The uploaded file is not a valid PDF.",
+          });
+        }
+
+        const parser = new PDFParse({
+          data: fileBuffer,
+          CanvasFactory,
         });
+
+        try {
+          const pdfTextResult = await parser.getText();
+          resumeText = pdfTextResult.text?.trim() || "";
+        } finally {
+          await parser.destroy?.();
+        }
+      } else if (isDocx) {
+        const hasZipSignature =
+          fileBuffer[0] === 0x50 &&
+          fileBuffer[1] === 0x4b &&
+          [0x03, 0x05, 0x07].includes(fileBuffer[2]) &&
+          [0x04, 0x06, 0x08].includes(fileBuffer[3]);
+
+        if (!hasZipSignature) {
+          fs.unlinkSync(req.file.path);
+          return res.status(400).json({
+            error: "The uploaded file is not a valid DOCX document.",
+          });
+        }
+
+        try {
+          const docxTextResult = await mammoth.extractRawText({
+            buffer: fileBuffer,
+          });
+          resumeText = docxTextResult.value?.trim() || "";
+        } catch {
+          if (fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+          }
+          return res.status(400).json({
+            error: "The DOCX document is damaged or could not be read.",
+          });
+        }
       }
-
-      const parser = new PDFParse({
-        data: fileBuffer,
-        CanvasFactory,
-      });
-
-      const pdfTextResult = await parser.getText();
-      const resumeText = pdfTextResult.text?.trim();
-
-      await parser.destroy?.();
 
       if (req.file?.path && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
@@ -1817,7 +1860,7 @@ app.post(
 
       if (!resumeText) {
         return res.status(400).json({
-          error: "Could not extract text from PDF",
+          error: "Could not extract readable text from this resume file.",
         });
       }
 
@@ -1838,7 +1881,7 @@ A document should be considered a resume ONLY if it clearly contains multiple re
 If the uploaded document is NOT a resume, you MUST return ONLY valid JSON in exactly this shape:
 {
   "isResume": false,
-  "message": "This file does not appear to be a resume. Please upload a valid resume PDF."
+  "message": "This file does not appear to be a resume. Please upload a valid PDF or DOCX resume."
 }
 
 If the uploaded document IS a resume, you MUST return ONLY valid JSON in exactly this shape:
@@ -2036,7 +2079,7 @@ app.use((error, _req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === "LIMIT_FILE_SIZE") {
       return res.status(413).json({
-        error: "The resume PDF must be 10 MB or smaller.",
+        error: "The resume file must be 10 MB or smaller.",
       });
     }
 

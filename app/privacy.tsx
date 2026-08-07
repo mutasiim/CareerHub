@@ -49,23 +49,24 @@ export default function PrivacyScreen() {
         </View>
 
         <PrivacySection icon="document-text-outline" title="Resume processing">
-          When you choose a resume, CareerHub sends the PDF to its secure
-          backend so the text can be extracted and analyzed. The extracted
-          resume content is sent to OpenAI to generate feedback, career paths,
-          and job-search terms.
+          When you choose a resume, CareerHub sends the PDF or DOCX file to its
+          secure backend so the text can be extracted and analyzed. The
+          extracted resume content is sent to OpenAI to generate feedback,
+          career paths, and job-search terms.
         </PrivacySection>
 
         <PrivacySection icon="trash-outline" title="Temporary uploads">
-          Uploaded PDF files are used only for processing and are deleted from
-          the backend after text extraction or when processing fails. CareerHub
-          does not intentionally keep a permanent copy of your uploaded PDF.
+          Uploaded resume files are used only for processing and are deleted
+          from the backend after text extraction or when processing fails.
+          CareerHub does not intentionally keep a permanent copy of your
+          uploaded file.
         </PrivacySection>
 
         <PrivacySection icon="sparkles-outline" title="Job match analysis">
           Match breakdowns send resume-derived career paths and keywords
           together with the selected job information to OpenAI. They do not send
-          the original PDF, your name, email address, phone number, or contact
-          section.
+          the original resume file, your name, email address, phone number, or
+          contact section.
         </PrivacySection>
 
         <PrivacySection icon="bookmark-outline" title="Saved jobs">

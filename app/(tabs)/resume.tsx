@@ -5,6 +5,8 @@ import React from "react";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -22,7 +24,10 @@ export default function ResumeScreen() {
   const handleUpload = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ["application/pdf"],
+        type: [
+          "application/pdf",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ],
         copyToCacheDirectory: true,
       });
 
@@ -39,7 +44,11 @@ export default function ResumeScreen() {
       formData.append("resume", {
         uri: file.uri,
         name: file.name,
-        type: file.mimeType || "application/pdf",
+        type:
+          file.mimeType ||
+          (file.name.toLowerCase().endsWith(".docx")
+            ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            : "application/pdf"),
       } as any);
 
       const response = await fetch(`${API_URL}/analyze-resume`, {
@@ -68,7 +77,10 @@ export default function ResumeScreen() {
       <View style={styles.glowOne} />
       <View style={styles.glowTwo} />
 
-      <View style={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <Text style={styles.eyebrow}>CareerHub</Text>
         <Text style={styles.title}>Upload your resume</Text>
         <Text style={styles.subtitle}>
@@ -86,8 +98,8 @@ export default function ResumeScreen() {
           </Text>
 
           <Text style={styles.cardText}>
-            Upload a PDF resume and get a full review with score breakdown,
-            strengths, and recommendations.
+            Upload a PDF or Word resume and get a full review with score
+            breakdown, strengths, and recommendations.
           </Text>
 
           {fileName ? (
@@ -99,14 +111,19 @@ export default function ResumeScreen() {
                 <Text style={styles.fileName} numberOfLines={1}>
                   {fileName}
                 </Text>
-                <Text style={styles.fileMeta}>PDF selected successfully</Text>
+                <Text style={styles.fileMeta}>
+                  {fileName.toLowerCase().endsWith(".docx")
+                    ? "Word document"
+                    : "PDF"}{" "}
+                  selected successfully
+                </Text>
               </View>
             </View>
           ) : (
             <View style={styles.emptyHint}>
               <Ionicons name="document-outline" size={18} color="#94a3b8" />
               <Text style={styles.emptyHintText}>
-                Supported format: PDF only
+                Supported formats: PDF and DOCX
               </Text>
             </View>
           )}
@@ -132,7 +149,7 @@ export default function ResumeScreen() {
                   color="#ffffff"
                 />
                 <Text style={styles.buttonText}>
-                  {fileName ? "Upload another resume" : "Choose resume PDF"}
+                  {fileName ? "Upload another resume" : "Choose resume file"}
                 </Text>
               </View>
             )}
@@ -154,7 +171,7 @@ export default function ResumeScreen() {
             </Text>
           </Text>
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -165,10 +182,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(59,130,246,0.12)",
   },
   content: {
-    flex: 1,
+    flexGrow: 1,
     paddingHorizontal: 24,
-    paddingTop: 90,
-    paddingBottom: 30,
+    paddingTop: Platform.OS === "web" ? 48 : 90,
+    paddingBottom: Platform.OS === "web" ? 40 : 30,
   },
   glowOne: {
     position: "absolute",
