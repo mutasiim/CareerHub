@@ -46,15 +46,19 @@ export default function ResumeScreen() {
       router.push("/analyzing");
 
       const formData = new FormData();
-      formData.append("resume", {
-        uri: file.uri,
-        name: file.name,
-        type:
-          file.mimeType ||
-          (file.name.toLowerCase().endsWith(".docx")
-            ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            : "application/pdf"),
-      } as any);
+      const fallbackMimeType = file.name.toLowerCase().endsWith(".docx")
+        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        : "application/pdf";
+
+      if (Platform.OS === "web" && file.file) {
+        formData.append("resume", file.file, file.name);
+      } else {
+        formData.append("resume", {
+          uri: file.uri,
+          name: file.name,
+          type: file.mimeType || fallbackMimeType,
+        } as any);
+      }
 
       const response = await fetch(`${API_URL}/analyze-resume`, {
         method: "POST",
