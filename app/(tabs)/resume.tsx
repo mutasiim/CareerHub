@@ -16,12 +16,16 @@ import {
 import { useResume } from "@/context/ResumeContext";
 
 const API_URL = "https://careerhub-backend-xbe9.onrender.com";
+const ANALYSIS_TIMEOUT_MS = 120_000;
 
 export default function ResumeScreen() {
   const { fileName, setFileName, setFeedback, loading, setLoading } =
     useResume();
 
   const handleUpload = async () => {
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: [
@@ -34,6 +38,7 @@ export default function ResumeScreen() {
       if (result.canceled) return;
 
       const file = result.assets[0];
+      timeout = setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
 
       setFileName(file.name);
       setLoading(true);
@@ -54,20 +59,39 @@ export default function ResumeScreen() {
       const response = await fetch(`${API_URL}/analyze-resume`, {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
 
-      const data = await response.json();
+      const rawResponse = await response.text();
+      let data: any = null;
+
+      try {
+        data = rawResponse ? JSON.parse(rawResponse) : null;
+      } catch {
+        throw new Error(
+          "The server returned an unreadable response. Please try again.",
+        );
+      }
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to analyze resume");
+        throw new Error(
+          data?.error || data?.details || "Failed to analyze resume",
+        );
       }
 
       setFeedback(data);
       router.replace("/feedback");
     } catch (error: any) {
       console.error("ERROR:", error);
-      Alert.alert("Error", error?.message || "Upload failed");
+      const message =
+        error?.name === "AbortError"
+          ? "Resume analysis took too long. Please try again in a moment."
+          : error?.message || "Upload failed";
+
+      Alert.alert("Analysis unavailable", message);
+      router.replace("/resume");
     } finally {
+      if (timeout) clearTimeout(timeout);
       setLoading(false);
     }
   };
